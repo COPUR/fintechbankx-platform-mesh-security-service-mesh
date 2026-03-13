@@ -1,2 +1,11 @@
-# platform-service-mesh-security
-DDD/EDA platform capability (svc-msh-security) owner:Mesh Security Squad wave:0
+# fintechbankx-platform-service-mesh-security
+
+## Ownership Metadata
+
+- Bounded context: platform
+- Service ID: svc-msh-security
+- Application ID: app.msh.security
+- Data owner pattern: N/A
+- Event namespace: evt.msh.policy
+- Owning squad: Mesh Security Squad
+- Wave: 0

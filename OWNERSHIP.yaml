@@ -1,0 +1,7 @@
+bounded_context: "platform"
+service_id: "svc-msh-security"
+application_id: "app.msh.security"
+data_owner_pattern: "N/A"
+event_namespace: "evt.msh.policy"
+owning_squad: "Mesh Security Squad"
+wave: "0"
