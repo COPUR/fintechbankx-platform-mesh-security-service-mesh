@@ -1,0 +1,34 @@
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: banking-local-gateway
+  namespace: banking-services
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "echo.local"
+
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: banking-local-echo-vs
+  namespace: banking-services
+spec:
+  hosts:
+    - "echo.local"
+  gateways:
+    - banking-local-gateway
+  http:
+    - route:
+        - destination:
+            host: echo-server.banking-services.svc.cluster.local
+            port:
+              number: 8000
+

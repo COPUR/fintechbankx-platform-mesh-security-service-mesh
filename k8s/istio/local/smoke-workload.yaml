@@ -1,0 +1,92 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: echo-server
+  namespace: banking-services
+  labels:
+    banking-service: "true"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo-server
+  namespace: banking-services
+  labels:
+    app: echo-server
+    banking-service: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: echo-server
+  template:
+    metadata:
+      labels:
+        app: echo-server
+        banking-service: "true"
+    spec:
+      serviceAccountName: echo-server
+      containers:
+        - name: echo
+          image: hashicorp/http-echo:1.0.0
+          args:
+            - "-text=fintechbankx-istio-ok"
+            - "-listen=:8080"
+          ports:
+            - containerPort: 8080
+              name: http
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo-server
+  namespace: banking-services
+  labels:
+    app: echo-server
+spec:
+  selector:
+    app: echo-server
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8080
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sleep
+  namespace: banking-services
+  labels:
+    banking-service: "true"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sleep
+  namespace: banking-services
+  labels:
+    app: sleep
+    banking-service: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sleep
+  template:
+    metadata:
+      labels:
+        app: sleep
+        banking-service: "true"
+    spec:
+      serviceAccountName: sleep
+      containers:
+        - name: sleep
+          image: curlimages/curl:8.7.1
+          command:
+            - sleep
+            - "3650d"
+

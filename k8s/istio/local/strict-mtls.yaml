@@ -1,0 +1,31 @@
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: mesh-default
+  namespace: istio-system
+spec:
+  mtls:
+    mode: STRICT
+
+---
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: banking-services-default
+  namespace: banking-services
+spec:
+  mtls:
+    mode: STRICT
+
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: banking-services-default-mtls
+  namespace: banking-services
+spec:
+  host: "*.banking-services.svc.cluster.local"
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+
