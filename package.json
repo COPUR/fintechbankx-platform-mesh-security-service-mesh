@@ -1,0 +1,14 @@
+{
+  "name": "fintechbankx-platform-service-mesh-security",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test scripts/validation/test/*.test.mjs",
+    "validate:strict-mtls": "node scripts/validation/validate-strict-mtls.mjs --path k8s --path security --require-baseline",
+    "ci:strict-mtls": "npm run test && npm run validate:strict-mtls"
+  },
+  "devDependencies": {
+    "yaml": "2.8.1"
+  }
+}

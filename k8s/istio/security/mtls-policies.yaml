@@ -26,11 +26,6 @@ spec:
       app: istio-ingressgateway
   mtls:
     mode: STRICT
-  portLevelMtls:
-    443:
-      mode: SIMPLE
-    8443:
-      mode: SIMPLE
 
 ---
 # Per-service mTLS configurations
@@ -153,11 +148,6 @@ spec:
       app: keycloak
   mtls:
     mode: STRICT
-  portLevelMtls:
-    8080:
-      mode: PERMISSIVE  # Allow non-mTLS for health checks
-    8443:
-      mode: STRICT
 
 ---
 # Monitoring namespace mTLS
@@ -171,7 +161,7 @@ metadata:
     compliance: internal
 spec:
   mtls:
-    mode: PERMISSIVE  # Allow both mTLS and plain text for monitoring tools
+    mode: STRICT
 
 ---
 # DestinationRules for mTLS traffic policy

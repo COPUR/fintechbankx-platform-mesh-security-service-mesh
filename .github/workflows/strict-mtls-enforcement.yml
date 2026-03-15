@@ -1,0 +1,32 @@
+name: Strict mTLS Enforcement
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - dev
+      - staging
+
+jobs:
+  strict-mtls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run strict mTLS tests
+        run: npm test
+
+      - name: Enforce strict mTLS policies
+        run: npm run validate:strict-mtls
