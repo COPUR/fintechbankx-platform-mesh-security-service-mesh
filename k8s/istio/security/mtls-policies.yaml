@@ -155,7 +155,7 @@ spec:
     mode: STRICT
   portLevelMtls:
     8080:
-      mode: PERMISSIVE  # Allow non-mTLS for health checks
+      mode: STRICT  # Enforce mTLS for health checks
     8443:
       mode: STRICT
 
@@ -171,7 +171,7 @@ metadata:
     compliance: internal
 spec:
   mtls:
-    mode: PERMISSIVE  # Allow both mTLS and plain text for monitoring tools
+    mode: STRICT  # Enforce mTLS for monitoring tools
 
 ---
 # DestinationRules for mTLS traffic policy
