@@ -54,7 +54,7 @@ jobs:
           fi
 
           # 1) Never allow PERMISSIVE in tracked manifest policies.
-          if rg -n "mode:\s*PERMISSIVE" "${SEARCH_PATHS[@]}" --glob '*.{yaml,yml}' 2>/dev/null; then
+          if rg -n "mode:\s*PERMISSIVE" "${SEARCH_PATHS[@]}" --glob '*.yaml' --glob '*.yml' 2>/dev/null; then
             echo "PERMISSIVE mTLS detected in tracked manifest files."
             exit 1
           fi
@@ -62,7 +62,7 @@ jobs:
           # 2) Critical Wave-0 platform repos must evidence STRICT mode in source artifacts.
           case "$REPO" in
             fintechbankx-platform-service-mesh-security|fintechbankx-platform-identity-keycloak-ldap)
-              if ! rg -n "mode:\s*STRICT|PeerAuthentication" "${SEARCH_PATHS[@]}" --glob '*.{yaml,yml,sh}' 2>/dev/null; then
+              if ! rg -n "mode:\s*STRICT|PeerAuthentication" "${SEARCH_PATHS[@]}" --glob '*.yaml' --glob '*.yml' --glob '*.sh' 2>/dev/null; then
                 echo "STRICT mTLS evidence not found for critical platform repo: $REPO"
                 exit 1
               fi
