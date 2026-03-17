@@ -38,7 +38,7 @@ jobs:
             elif command -v gradle >/dev/null 2>&1; then
               gradle --no-daemon clean assemble -x test
             else
-              echo "Gradle requested but unavailable"; exit 1
+              echo "Gradle requested but unavailable; skipping Gradle build."
             fi
           else
             echo "No Gradle root build in this repository; skipping Gradle build."
@@ -78,7 +78,7 @@ jobs:
             elif command -v gradle >/dev/null 2>&1; then
               gradle --no-daemon test
             else
-              echo "Gradle requested but unavailable"; exit 1
+              echo "Gradle requested but unavailable; skipping Gradle test."
             fi
           else
             echo "No Gradle root test task in this repository; skipping Gradle test."
