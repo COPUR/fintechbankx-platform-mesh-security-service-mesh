@@ -1,0 +1,133 @@
+name: Required Gates
+
+on:
+  pull_request:
+    branches: [main, dev, staging]
+  push:
+    branches: [main, dev, staging]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ci/build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 23
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '23'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f build.gradle ] || [ -f settings.gradle ] || [ -x ./gradlew ]; then
+            if [ -x ./gradlew ]; then
+              ./gradlew --no-daemon clean assemble -x test
+            elif command -v gradle >/dev/null 2>&1; then
+              gradle --no-daemon clean assemble -x test
+            else
+              echo "Gradle requested but unavailable"; exit 1
+            fi
+          else
+            echo "No Gradle root build in this repository; skipping Gradle build."
+          fi
+          if [ -f package.json ]; then
+            npm ci
+            npm run build --if-present
+          else
+            echo "No package.json build in this repository; skipping Node build."
+          fi
+
+  test:
+    name: ci/test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 23
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '23'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f build.gradle ] || [ -f settings.gradle ] || [ -x ./gradlew ]; then
+            if [ -x ./gradlew ]; then
+              ./gradlew --no-daemon test
+            elif command -v gradle >/dev/null 2>&1; then
+              gradle --no-daemon test
+            else
+              echo "Gradle requested but unavailable"; exit 1
+            fi
+          else
+            echo "No Gradle root test task in this repository; skipping Gradle test."
+          fi
+          if [ -f package.json ]; then
+            npm ci
+            npm test --if-present
+          else
+            echo "No package.json test in this repository; skipping Node test."
+          fi
+
+      - name: Guardrail - disallow generic map request payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d src/main/java ]; then
+            if grep -R -nE "Map<\s*String\s*,\s*Object\s*>" src/main/java --include="*Controller.java"; then
+              echo "Generic Map<String,Object> payloads are disallowed in controllers."
+              exit 1
+            fi
+          else
+            echo "No Java controller sources in this repository; guardrail check skipped."
+          fi
+
+  security:
+    name: ci/security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install gitleaks
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmpdir="$(mktemp -d)"
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz \
+            | tar -xz -C "$tmpdir"
+          sudo install "$tmpdir/gitleaks" /usr/local/bin/gitleaks
+          rm -rf "$tmpdir"
+
+      - name: Run gitleaks (workspace scan)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f .gitleaks.toml ]; then
+            gitleaks detect --source . --no-banner --redact --no-git --config .gitleaks.toml \
+              --report-format json --report-path gitleaks-report.json
+          else
+            gitleaks detect --source . --no-banner --redact --no-git \
+              --report-format json --report-path gitleaks-report.json
+          fi
