@@ -1,69 +1,62 @@
 # fintechbankx-platform-mesh-security-service-mesh
 
-Bu repo, FinTechBankX mikroservis dönüşümünde Spotify modeline göre tanımlanmış resmi servis alanıdır.
+Bu repository, FinTechBankX DDD/EDA dönüşümünde **svc-msh-security** servis yetkinliğinin kaynak kodunu, kontratlarını ve operasyonel guardrail'lerini içerir.
 
 ## Sorumluluk ve Sahiplik
+| Alan | Değer |
+|---|---|
+| Organizasyon Modeli | Spotify Model (Tribe/Squad) |
+| Tribe | Platform & Enablement Tribe |
+| Squad | Mesh Security Squad |
+| Repo Kümesi (Capability) | platform |
+| Service ID | svc-msh-security |
+| Bounded Context | service_mesh_security |
+| Wave | 0 |
+| Mimari Yaklaşım | DDD + Hexagonal + Event-Driven |
 
-- **Tribe:** Platform & Security Tribe
-- **Squad:** Mesh Security Squad
-- **Repo Kümesi:** `platform-security`
-- **Bounded Context:** `security`
-- **Ana Capability:** Istio/service-mesh security and mTLS policies
-- **Dönüşüm Wave:** 0
-
-Bu repo aşağıdaki yaklaşımı zorunlu olarak uygular:
-
-1. DDD bounded context sınırlarına bağlı geliştirme.
-2. Hexagonal (Ports & Adapters) mimari.
-3. Event-driven ve sözleşme-öncelikli entegrasyon.
-4. Güvenlik guardrail'leri (FAPI, mTLS, DPoP kapsamına göre).
-5. PR-only governance, zorunlu CI quality gate ve izlenebilirlik.
+## Sorumluluk Sınırları
+- Bu repo kendi bounded context domain modelinin tek yetkili sahibidir.
+- Domain kuralları altyapıdan bağımsız tutulur; entegrasyonlar port/adapter katmanında yönetilir.
+- API/Event kontratları geriye dönük uyumluluk kontrolleri ile korunur.
+- Güvenlik guardrail'leri (mTLS, token doğrulama, idempotency, log hijyeni) CI/CD ile zorlanır.
 
 ## Kapsam
-
 ### In Scope
-
-- `Istio/service-mesh security and mTLS policies` kapsamında kod, sözleşme, test, runbook ve release artefaktları.
-- Bu bounded context'e ait servis içi iş kuralları.
-- Sadece API/event sözleşmeleri üzerinden diğer context'lerle entegrasyon.
+- service_mesh_security bağlamına ait uygulama kodu, testler ve otomasyon.
+- Bu servise ait OpenAPI/AsyncAPI veya şema artefaktları.
+- Bu servisin çalışma zamanı operasyonları (gözlemlenebilirlik, release, rollback).
 
 ### Out of Scope
-
-- Başka bounded context veritabanına doğrudan erişim.
-- Ortak “shared database” yaklaşımı.
-- Guardrail bypass eden manuel release adımları.
+- Diğer bounded context'lerin iş kuralları ve veri sahipliği.
+- Paylaşımlı DB anti-pattern'i; cross-context doğrudan tablo erişimi.
+- Platform dışı gizli bilgi/anahtar yönetimi (merkezi policy dışında local hardcode).
 
 ## Mühendislik Standartları
+- **TDD öncelikli** geliştirme, birim test + entegrasyon testi.
+- **Clean Architecture**: Domain katmanı framework bağımsız.
+- **12-Factor** ve environment-driven configuration.
+- **FAPI odaklı güvenlik** (OIDC/OAuth2, mTLS, DPoP gereksinimleri ilgili servislerde).
+- **PII güvenliği**: loglarda maskeleme, secret'ların source/env içine yazılmaması.
 
-- Java 23 / Gradle (repo tipine göre)
-- TDD öncelikli geliştirme
-- Minimum test coverage hedefi: **%85+**
-- OpenAPI/AsyncAPI sözleşme doğrulama
-- Structured logging, trace-id propagation, metrics baseline
-
-## Branching, Release ve Guardrail
-
-- Korumalı branch seti: `main`, `dev`, `staging`
-- Zorunlu kontroller:
-  - `ci/build`
-  - `ci/test`
-  - `ci/security`
-  - `local-path-leak-check`
-  - `secret-pattern-scan`
-  - `readme-doc-link-check`
-- Wave 0 platform repolarında ek zorunlu kontrol: `strict-mtls`
+## Branching ve Release Akışı
+- Uzun ömürlü branch'ler: `main`, `dev`, `staging`, `local`.
+- Feature branch kuralı: `codex/<kisa-aciklama>`.
+- Release yaklaşımı: PR + required status checks + tag tabanlı sürümleme.
 
 ## Dokümantasyon ve Referanslar
+- [Enterprise Architecture Hub](https://github.com/COPUR/fintechbankx-governance-architecture-enablement-enterprise-architecture)
+- [Secure Microservices Architecture](https://github.com/COPUR/fintechbankx-governance-architecture-enablement-enterprise-architecture/blob/main/docs/architecture/overview/SECURE_MICROSERVICES_ARCHITECTURE.md)
+- [Service Data Ownership Matrix](https://github.com/COPUR/fintechbankx-governance-architecture-enablement-enterprise-architecture/blob/main/docs/enterprisearchitecture/implementation-development/SERVICE_DATA_OWNERSHIP_MATRIX.md)
+- [Service API Contracts Index](https://github.com/COPUR/fintechbankx-governance-architecture-enablement-enterprise-architecture/blob/main/docs/enterprisearchitecture/implementation-development/SERVICE_API_CONTRACTS_INDEX.md)
+- [Transformation Plan](https://github.com/COPUR/fintechbankx-governance-architecture-enablement-enterprise-architecture/blob/main/docs/enterprisearchitecture/implementation-development/MICROSERVICES_TRANSFORMATION_PLAN.md)
+- [Capability Map (PUML)](https://github.com/COPUR/fintechbankx-governance-architecture-enablement-enterprise-architecture/blob/main/docs/puml/service-mesh/enterprise-capability-map.puml)
+- [Bu Repo Dokümantasyonu](./docs)
 
-- **Enterprise Architecture Repo:** https://github.com/COPUR/fintechbankx-governance-architecture-enablement-enterprise-architecture
-- **Spotify Tribe/Squad Repo Stratejisi:** https://github.com/COPUR/fintechbankx-governance-architecture-enablement-enterprise-architecture/blob/main/docs/enterprisearchitecture/implementation-development/transformation/SPOTIFY_TRIBE_SQUAD_REPOSITORY_STRATEGY.md
-- **Konsolide Backlog Board:** https://github.com/COPUR/fintechbankx-governance-architecture-enablement-enterprise-architecture/blob/main/docs/enterprisearchitecture/implementation-development/transformation/outputs/backlog-normalization-board-2026-03-17.md
-- **Cutover Closure Raporu:** https://github.com/COPUR/fintechbankx-governance-architecture-enablement-enterprise-architecture/blob/main/docs/enterprisearchitecture/implementation-development/transformation/outputs/phase-c-cutover-closure-report-2026-03-17.md
-- **Guardrail Hardening Raporu:** https://github.com/COPUR/fintechbankx-governance-architecture-enablement-enterprise-architecture/blob/main/docs/enterprisearchitecture/implementation-development/transformation/outputs/phase-b-context-hardening-pass-2026-03-17.md
+## Güvenlik ve Uyumluluk Notları
+- Gerçek secret değerleri repo veya `.env` içinde tutulmaz.
+- Secret üretim/rotasyon olayları merkezi log/SIEM'e taşınır.
+- CI pipeline, anonimlik ve local-path sızıntısı kontrollerini bloklayıcı olarak çalıştırır.
 
-## Katkı Modeli
-
-1. Doğrudan `main` yazımı yok, yalnızca PR ile değişiklik.
-2. Mimari kararlarda ADR güncellemesi zorunlu.
-3. Sözleşme değişikliği varsa OpenAPI/AsyncAPI ve testler birlikte güncellenir.
-4. Güvenlik ve anonimlik kuralları ihlal eden içerik merge edilmez.
+## Katkı
+- Katkı süreci için `CONTRIBUTING.md` ve squad runbook'ları izlenmelidir.
+- PR'larda mimari kararlar ADR veya backlog referansı ile ilişkilendirilmelidir.
