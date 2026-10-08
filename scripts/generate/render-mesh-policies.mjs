@@ -409,6 +409,18 @@ function sidecars(contract) {
 }
 
 // ------------------------------------------------------------ ingress routing
+// TLS ends at this gateway, so it is the only trustworthy source of the
+// public scheme, host and port. Every route overwrites the forwarded headers
+// (a client-supplied value never reaches a service) and drops the RFC 7239
+// Forwarded header and X-Forwarded-Prefix. DPoP-enforcing services build the
+// proof's htu from these values (platform contract, DPoP section).
+const forwardedHeaders = (host) => ({
+  request: {
+    set: { 'x-forwarded-proto': 'https', 'x-forwarded-host': host, 'x-forwarded-port': '443' },
+    remove: ['forwarded', 'x-forwarded-prefix'],
+  },
+});
+
 function ingressRouting(contract) {
   const gw = contract.gateway;
   const routes = serviceWorkloads(contract)
@@ -417,6 +429,7 @@ function ingressRouting(contract) {
       name: w.serviceId,
       match: [{ uri: { prefix: w.apiPrefix } }],
       route: [{ destination: { host: `${w.serviceAccount}.${w.ns}.svc.cluster.local`, port: { number: contract.ports.http } } }],
+      headers: forwardedHeaders('API_HOST'),
     }));
   return [
     {
@@ -471,6 +484,7 @@ function ingressRouting(contract) {
             name: 'keycloak-realm',
             match: [{ uri: { prefix: '/realms/fintechbankx/' } }, { uri: { prefix: '/resources/' } }],
             route: [{ destination: { host: 'keycloak.identity.svc.cluster.local', port: { number: 8080 } } }],
+            headers: forwardedHeaders('IDENTITY_HOST'),
           },
         ],
       },

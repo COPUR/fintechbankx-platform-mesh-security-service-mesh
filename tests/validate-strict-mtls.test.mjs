@@ -244,3 +244,19 @@ test('identity: realm import, JGroups ports and management scrape', () => {
   assert.deepEqual(ops('allow-from-observability-prometheus-to-keycloak'), [{ ports: ['9000'], methods: ['GET'], paths: ['/metrics', '/health', '/health/*'] }]);
   assert.deepEqual(ops('allow-from-observability-grafana-to-keycloak')[0].ports, ['8080']);
 });
+
+test('gateway: every public route overwrites the forwarded headers (DPoP htu)', () => {
+  const vss = deployable().filter((d) => d.doc.kind === 'VirtualService' && d.doc.metadata.namespace === 'istio-ingress');
+  assert.ok(vss.length >= 2);
+  for (const { doc } of vss) {
+    const host = doc.spec.hosts[0];
+    for (const route of doc.spec.http) {
+      assert.deepEqual(
+        route.headers?.request?.set,
+        { 'x-forwarded-proto': 'https', 'x-forwarded-host': host, 'x-forwarded-port': '443' },
+        `${doc.metadata.name}/${route.name}`,
+      );
+      assert.deepEqual(route.headers.request.remove, ['forwarded', 'x-forwarded-prefix'], `${doc.metadata.name}/${route.name}`);
+    }
+  }
+});
