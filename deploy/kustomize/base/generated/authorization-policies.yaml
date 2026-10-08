@@ -3255,9 +3255,33 @@ spec:
         - operation:
             ports:
               - "8080"
+            methods:
+              - POST
             paths:
               - /open-finance/v1/par
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
               - /open-finance/v1/payment-consents/{*}
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
               - /open-finance/v1/payment-consents/{*}/accept
               - /open-finance/v1/payment-consents/{*}/reject
 ---

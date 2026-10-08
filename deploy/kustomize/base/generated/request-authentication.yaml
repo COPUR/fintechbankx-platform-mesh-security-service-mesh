@@ -13,6 +13,13 @@ spec:
   jwtRules:
     - issuer: https://IDENTITY_HOST/realms/fintechbankx
       jwksUri: https://IDENTITY_HOST/realms/fintechbankx/protocol/openid-connect/certs
+      fromHeaders:
+        - name: Authorization
+          prefix: "Bearer "
+        - name: Authorization
+          prefix: "DPoP "
+      fromParams:
+        - access_token
       forwardOriginalToken: true
 ---
 apiVersion: security.istio.io/v1

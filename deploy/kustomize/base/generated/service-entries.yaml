@@ -168,3 +168,21 @@ spec:
       name: tls
       protocol: TLS
   resolution: DNS
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: legacy-open-finance
+  namespace: istio-ingress
+spec:
+  exportTo:
+    - .
+  location: MESH_EXTERNAL
+  hosts:
+    - LEGACY_OPEN_FINANCE_HOST
+  ports:
+    - number: 80
+      name: http-legacy
+      protocol: HTTP
+      targetPort: 443
+  resolution: DNS

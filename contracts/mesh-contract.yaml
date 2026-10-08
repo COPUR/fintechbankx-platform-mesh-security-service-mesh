@@ -57,6 +57,68 @@ gateway:
       staging: [3, 6]
       prod: [3, 12]
 
+  # Token locations the gateway RequestAuthentication validates. Istio's
+  # defaults (Authorization "Bearer ", query access_token) plus
+  # Authorization "DPoP ": TPP tokens are DPoP-bound (RFC 9449) and the
+  # rtp-cutover cohort rule (R3) routes on the validated token's azp, which
+  # the gateway only sees for tokens it validated. The gateway still checks
+  # the issuer only; the DPoP proof is checked by the service.
+  tokenLocations:
+    fromHeaders:
+      - {name: Authorization, prefix: "Bearer "}
+      - {name: Authorization, prefix: "DPoP "}
+    fromParams: [access_token]
+  # Backends outside this mesh that the gateway still routes to during a
+  # strangler cut-over. One explicit host each (placeholder replaced per
+  # overlay from mesh-params), HTTPS originated by the gateway with the host
+  # name verified; ServiceEntry and DestinationRule are visible to the
+  # gateway namespace only. Egress uses the gateway's existing VPC 443 rule.
+  legacyBackends:
+    legacy-open-finance:
+      host: LEGACY_OPEN_FINANCE_HOST
+      evidence: enterprise-loan-management-system open-finance-context (requesttopay package); its deployment target is not in any platform repo yet
+  # Strangler cut-overs at the gateway. Rules render as VirtualService routes
+  # in this order, ahead of every other API route; regexes are RE2 full
+  # matches on the path without query string (Envoy safe_regex), anchored,
+  # never prefixes. A rule with `cohort: true` matches only tokens whose
+  # cohort claim (validated by the gateway) is one of cohort.clients, one
+  # exact value per entry; with an empty cohort the rule is not rendered at
+  # all (an Istio route without match entries matches everything).
+  cutovers:
+    - name: rtp-cutover
+      evidence: >-
+        RUNBOOK-EXTRACT-pay-request-to-pay section 3 (request-to-pay PR #14
+        d6049d7): R1 CONS-RTP2- follow-ups always to this service, R2 other
+        ids to the monolith, R3 creates from the cohort, R4 other creates.
+      target: payments/payment-request-to-pay-service
+      legacy: legacy-open-finance
+      cohort:
+        name: rtp-cutover-cohort
+        claim: azp
+        # Runbook step 2: empty (no TPP moves). Step 3 adds pilot TPP client
+        # ids here, one literal id per entry; step 4 = every TPP.
+        clients: []
+      rules:
+        - id: R1
+          to: target
+          match:
+            - {method: GET, regex: "^/open-finance/v1/payment-consents/CONS-RTP2-[0-9a-f-]{36}$"}
+            - {method: POST, regex: "^/open-finance/v1/payment-consents/CONS-RTP2-[0-9a-f-]{36}/(accept|reject)$"}
+        - id: R2
+          to: legacy
+          match:
+            - {method: GET, regex: "^/open-finance/v1/payment-consents/[^/]+$"}
+            - {method: POST, regex: "^/open-finance/v1/payment-consents/[^/]+/(accept|reject)$"}
+        - id: R3
+          to: target
+          cohort: true
+          match:
+            - {method: POST, regex: "^/open-finance/v1/par$"}
+        - id: R4
+          to: legacy
+          match:
+            - {method: POST, regex: "^/open-finance/v1/par$"}
+
 # kind: service   -> bounded-context namespace with application workloads
 # kind: platform  -> platform namespace managed by a platform repo
 namespaces:
@@ -85,7 +147,8 @@ namespaces:
       - serviceAccount: payment-request-to-pay-service
         serviceId: svc-pay-request-to-pay
         sourceRepo: fintechbankx-lendingpayments-payment-orchestration-request-to-pay
-        apiPrefix: [/open-finance/v1/par, /open-finance/v1/payment-consents]   # TPP-facing, DPoP (request-to-pay PR #14 e5b3592)
+        # TPP-facing, DPoP. No prefix route: the gateway routes its four exact
+        # operations through gateway.cutovers rtp-cutover (R1 to R4).
         datastores: [aurora-postgresql, msk]
       - serviceAccount: payment-recurring-mandates-service
         serviceId: svc-pay-recurring-mandates
@@ -528,11 +591,30 @@ edges:
     port: 8080
     paths: [/open-finance/v1/vrp/payment-consents, /open-finance/v1/vrp/payment-consents/*, /open-finance/v1/vrp/payments, /open-finance/v1/vrp/payments/*]
     evidence: recurring-mandates PR #13 f8bc1b0 @RequestMapping("/open-finance/v1/vrp"); TPP-facing, DPoP, aud svc-pay-recurring-mandates
+  # Gateway -> request to pay: one edge per (method, path), like the consent
+  # flow above (an operation ANDs methods and paths as sets). Istio 1.24
+  # AuthorizationPolicy paths have no regex, so {*} admits any id segment;
+  # the CONS-RTP2- id split is done by the gateway routes (cutovers
+  # rtp-cutover R1/R2) and the service's own ownership check. 8081 is never
+  # reachable from the gateway.
   - from: istio-ingress/istio-ingressgateway
     to: payments/payment-request-to-pay-service
     port: 8080
-    paths: [/open-finance/v1/par, "/open-finance/v1/payment-consents/{*}", "/open-finance/v1/payment-consents/{*}/accept", "/open-finance/v1/payment-consents/{*}/reject"]
-    evidence: request-to-pay PR #14 e5b3592 @RequestMapping("/open-finance/v1") POST /par, GET /payment-consents/{id}, POST /payment-consents/{id}/accept|reject; TPP-facing, DPoP, aud svc-pay-request-to-pay
+    methods: [POST]
+    paths: [/open-finance/v1/par]
+    evidence: request-to-pay PR #14 d6049d7 POST /open-finance/v1/par (runbook R3); TPP-facing, DPoP, aud svc-pay-request-to-pay
+  - from: istio-ingress/istio-ingressgateway
+    to: payments/payment-request-to-pay-service
+    port: 8080
+    methods: [GET]
+    paths: ["/open-finance/v1/payment-consents/{*}"]
+    evidence: request-to-pay PR #14 d6049d7 GET /open-finance/v1/payment-consents/{id} (runbook R1)
+  - from: istio-ingress/istio-ingressgateway
+    to: payments/payment-request-to-pay-service
+    port: 8080
+    methods: [POST]
+    paths: ["/open-finance/v1/payment-consents/{*}/accept", "/open-finance/v1/payment-consents/{*}/reject"]
+    evidence: request-to-pay PR #14 d6049d7 POST /open-finance/v1/payment-consents/{id}/accept|reject (runbook R1)
   - from: istio-ingress/istio-ingressgateway
     to: payments/payment-bulk-orchestration-service
     port: 8080

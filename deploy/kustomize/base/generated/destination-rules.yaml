@@ -484,6 +484,33 @@ spec:
 apiVersion: networking.istio.io/v1
 kind: DestinationRule
 metadata:
+  name: legacy-open-finance
+  namespace: istio-ingress
+spec:
+  host: LEGACY_OPEN_FINANCE_HOST
+  exportTo:
+    - .
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        connectTimeout: 1s
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+    portLevelSettings:
+      - port:
+          number: 80
+        tls:
+          mode: SIMPLE
+          sni: LEGACY_OPEN_FINANCE_HOST
+          subjectAltNames:
+            - LEGACY_OPEN_FINANCE_HOST
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
   name: identity-external
   namespace: istio-system
 spec:

@@ -24,6 +24,17 @@ replacements:
         fieldPaths: [spec.servers.0.hosts.0, spec.servers.1.hosts.0]
       - select: {kind: VirtualService, name: fintechbankx-api}
         fieldPaths: [spec.hosts.0, "spec.http.*.headers.request.set.x-forwarded-host"]
+  # Monolith host behind the strangler cut-over routes (gateway.legacyBackends).
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.LEGACY_OPEN_FINANCE_HOST}
+    targets:
+      - select: {kind: ServiceEntry, name: legacy-open-finance}
+        fieldPaths: [spec.hosts.0]
+      - select: {kind: DestinationRule, name: legacy-open-finance}
+        fieldPaths: [spec.host, spec.trafficPolicy.portLevelSettings.0.tls.sni, spec.trafficPolicy.portLevelSettings.0.tls.subjectAltNames.0]
+      - select: {kind: VirtualService, name: fintechbankx-api}
+        fieldPaths:
+          - "spec.http.[name=rtp-cutover-r2].route.0.destination.host"
+          - "spec.http.[name=rtp-cutover-r4].route.0.destination.host"
   # CIDRs -> NetworkPolicy ipBlocks and the Aurora ServiceEntry address.
   - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.VPC_CIDR}
     targets:

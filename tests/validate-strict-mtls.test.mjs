@@ -308,10 +308,11 @@ test('gateway: TPP payment APIs and the consent authorization flow are routed an
 test('gateway: request-to-pay TPP paths, open-data rate limit and the RDS CA bundle', () => {
   const docs = deployable();
   const api = docs.find((d) => d.doc.kind === 'VirtualService' && d.doc.metadata.name === 'fintechbankx-api').doc;
-  assert.deepEqual(
-    api.spec.http.find((r) => r.name === 'svc-pay-request-to-pay').match.map((m) => m.uri.prefix),
-    ['/open-finance/v1/par', '/open-finance/v1/payment-consents'],
-  );
+  // Request to pay is routed only by the runbook's exact cut-over rules
+  // (tests/rtp-cutover.test.mjs), never by prefix; R3 is absent while the cohort is empty.
+  assert.equal(api.spec.http.find((r) => r.name === 'svc-pay-request-to-pay'), undefined);
+  assert.deepEqual(api.spec.http.slice(0, 3).map((r) => r.name), ['rtp-cutover-r1', 'rtp-cutover-r2', 'rtp-cutover-r4']);
+  for (const r of api.spec.http.slice(0, 3)) for (const m of r.match) assert.ok(m.uri.regex && !m.uri.prefix, r.name);
   const ef = docs.find((d) => d.doc.kind === 'EnvoyFilter' && d.doc.metadata.name === 'anonymous-open-data-rate-limit').doc;
   const limited = ef.spec.configPatches.filter((p) => p.applyTo === 'HTTP_ROUTE').map((p) => p.match.routeConfiguration.vhost.route.name);
   assert.deepEqual(limited, ['svc-of-open-products-catalog', 'svc-of-atm-directory', 'svc-of-banking-metadata']);

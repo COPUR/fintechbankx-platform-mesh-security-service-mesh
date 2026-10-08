@@ -203,3 +203,38 @@ see the workloads, so it does not prove the selectors match running pods.
   `global-bundle.pem`, into every `service` and `platform` namespace. Its source is
   `k8s/platform/cert-manager/amazon-rds-global-bundle.pem`, a copy of
   `https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`; refresh it when AWS announces a CA rotation.
+
+## Request-to-pay cut-over at the gateway (Proposed, request-to-pay PR #14 d6049d7)
+
+Contract `gateway.cutovers` entry `rtp-cutover` renders the runbook's rules (RUNBOOK-EXTRACT-pay-request-to-pay
+section 3) as the first routes of VirtualService `fintechbankx-api`, in this order, with forwarded headers overwritten
+like every public route:
+
+| Route | Match (method, RE2 full match on the path without query) | Destination |
+|---|---|---|
+| `rtp-cutover-r1` | `GET ^/open-finance/v1/payment-consents/CONS-RTP2-[0-9a-f-]{36}$`, `POST .../CONS-RTP2-[0-9a-f-]{36}/(accept\|reject)$` | `payment-request-to-pay-service.payments:8080` |
+| `rtp-cutover-r2` | the same operations with any other id segment | monolith (`legacy-open-finance`) |
+| `rtp-cutover-r3` | `POST ^/open-finance/v1/par$` and `@request.auth.claims.azp` exactly one of `rtp-cutover-cohort` | `payment-request-to-pay-service.payments:8080` |
+| `rtp-cutover-r4` | `POST ^/open-finance/v1/par$` | monolith |
+
+- No prefix route reaches request to pay; every other method or sub-path on these paths gets no route (404).
+- The cohort is `gateway.cutovers[rtp-cutover].cohort.clients`: literal TPP client ids only (the renderer rejects
+  wildcards, regexes, `svc-*` and `fintechbankx-*` clients). It is empty (runbook step 2), and an empty cohort renders
+  **no** R3 route, because an Istio route without match entries matches every request. Moving a TPP = adding its
+  client id and re-rendering.
+- R3 reads `azp` from the token the gateway validated. TPP tokens use `Authorization: DPoP`, so the gateway
+  RequestAuthentication now extracts `Bearer ` and `DPoP ` from `Authorization` and keeps the `access_token` query
+  parameter (Istio's default locations); it still checks the issuer only. JWT claim routing is supported on gateways
+  only (Istio 1.24). Not verified on a cluster: how the gateway treats a DPoP token from another issuer (Envoy
+  `allow_missing` is expected to treat an unknown issuer like a missing token, as it already does for Bearer); drill
+  before step 3.
+- AuthorizationPolicy cannot express the id split: Istio 1.24 paths support exact, prefix/suffix `*` and whole-segment
+  templates (`{*}`, `{**}`), no regex. The nearest safe form is used: gateway -> request to pay is allowed per
+  (method, path) for `POST /open-finance/v1/par`, `GET /open-finance/v1/payment-consents/{*}` and
+  `POST /open-finance/v1/payment-consents/{*}/accept|reject` on 8080 only; the `CONS-RTP2-` split is enforced by
+  the routes, and the service checks that the calling TPP owns the request. The gateway is the only principal allowed
+  on 8080 (the DPoP `htu` is built from headers only the gateway sets); 8081 is never reachable from it.
+- The monolith is `gateway.legacyBackends.legacy-open-finance`: one host per environment (`LEGACY_OPEN_FINANCE_HOST`
+  in the overlay params, placeholder until its deployment target is decided), ServiceEntry and DestinationRule in
+  `istio-ingress` exported to that namespace only, HTTPS originated by the gateway with SNI and SAN = the host. It must
+  be reachable on 443 inside `VPC_CIDR` (the gateway's existing egress rule); anything else needs a contract change.

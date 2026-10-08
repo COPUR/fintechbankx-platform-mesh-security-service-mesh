@@ -47,6 +47,71 @@ spec:
   gateways:
     - istio-ingress/fintechbankx-public
   http:
+    - name: rtp-cutover-r1
+      match:
+        - uri:
+            regex: ^/open-finance/v1/payment-consents/CONS-RTP2-[0-9a-f-]{36}$
+          method:
+            exact: GET
+        - uri:
+            regex: ^/open-finance/v1/payment-consents/CONS-RTP2-[0-9a-f-]{36}/(accept|reject)$
+          method:
+            exact: POST
+      route:
+        - destination:
+            host: payment-request-to-pay-service.payments.svc.cluster.local
+            port:
+              number: 8080
+      headers:
+        request:
+          set:
+            x-forwarded-proto: https
+            x-forwarded-host: API_HOST
+            x-forwarded-port: "443"
+          remove:
+            - forwarded
+            - x-forwarded-prefix
+    - name: rtp-cutover-r2
+      match:
+        - uri:
+            regex: ^/open-finance/v1/payment-consents/[^/]+$
+          method:
+            exact: GET
+        - uri:
+            regex: ^/open-finance/v1/payment-consents/[^/]+/(accept|reject)$
+          method:
+            exact: POST
+      route:
+        - destination: &a1
+            host: LEGACY_OPEN_FINANCE_HOST
+            port:
+              number: 80
+      headers:
+        request:
+          set:
+            x-forwarded-proto: https
+            x-forwarded-host: API_HOST
+            x-forwarded-port: "443"
+          remove:
+            - forwarded
+            - x-forwarded-prefix
+    - name: rtp-cutover-r4
+      match:
+        - uri:
+            regex: ^/open-finance/v1/par$
+          method:
+            exact: POST
+      route:
+        - destination: *a1
+      headers:
+        request:
+          set:
+            x-forwarded-proto: https
+            x-forwarded-host: API_HOST
+            x-forwarded-port: "443"
+          remove:
+            - forwarded
+            - x-forwarded-prefix
     - name: svc-ln-loan-lifecycle
       match:
         - uri:
@@ -72,26 +137,6 @@ spec:
       route:
         - destination:
             host: payment-initiation-settlement-service.payments.svc.cluster.local
-            port:
-              number: 8080
-      headers:
-        request:
-          set:
-            x-forwarded-proto: https
-            x-forwarded-host: API_HOST
-            x-forwarded-port: "443"
-          remove:
-            - forwarded
-            - x-forwarded-prefix
-    - name: svc-pay-request-to-pay
-      match:
-        - uri:
-            prefix: /open-finance/v1/par
-        - uri:
-            prefix: /open-finance/v1/payment-consents
-      route:
-        - destination:
-            host: payment-request-to-pay-service.payments.svc.cluster.local
             port:
               number: 8080
       headers:

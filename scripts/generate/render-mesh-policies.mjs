@@ -73,11 +73,13 @@ function peerAuthentications(contract) {
 }
 
 // ----------------------------------------------------- request authentication
-function jwtRule(contract, audiences) {
+function jwtRule(contract, audiences, locations) {
   return {
     issuer: contract.identity.issuer,
     jwksUri: contract.identity.jwksUri,
     ...(audiences ? { audiences } : {}),
+    ...(locations?.fromHeaders ? { fromHeaders: structuredClone(locations.fromHeaders) } : {}),
+    ...(locations?.fromParams ? { fromParams: [...locations.fromParams] } : {}),
     forwardOriginalToken: true,
   };
 }
@@ -92,7 +94,7 @@ function requestAuthentications(contract) {
       apiVersion: SEC,
       kind: 'RequestAuthentication',
       metadata: { name: 'keycloak-jwt', namespace: contract.gateway.namespace },
-      spec: { selector: { matchLabels: contract.gateway.selector }, jwtRules: [jwtRule(contract)] },
+      spec: { selector: { matchLabels: contract.gateway.selector }, jwtRules: [jwtRule(contract, null, contract.gateway.tokenLocations)] },
     },
   ];
   for (const n of serviceNamespaces(contract)) {
@@ -329,6 +331,7 @@ function destinationRules(contract) {
       },
     });
   }
+  docs.push(...legacyBackendDestinationRules(contract));
   // External identity host: exactly the policy pack values (keycloak-egress-dr).
   docs.push({
     apiVersion: NET,
@@ -407,7 +410,58 @@ function serviceEntries(contract) {
       ports: [{ number: 443, name: 'tls', protocol: 'TLS' }],
       resolution: 'DNS',
     }),
+    ...legacyBackendServiceEntries(contract),
   ];
+}
+
+// ----------------------------------------------------- legacy (cut-over) backends
+// Backends outside the mesh the gateway routes to during a strangler
+// cut-over (contract gateway.legacyBackends). The gateway sends HTTP to port
+// 80 of the ServiceEntry and originates TLS to 443 (DestinationRule SIMPLE,
+// SNI and SAN = the host); both are exported to the gateway namespace only.
+const LEGACY_PORT = 80;
+
+function legacyBackends(contract) {
+  const out = [];
+  for (const [name, b] of Object.entries(contract.gateway.legacyBackends || {})) {
+    if (typeof b.host !== 'string' || !/^[A-Za-z0-9_.-]+$/.test(b.host)) {
+      throw new Error(`gateway.legacyBackends.${name}: host must be one literal host name (no wildcard)`);
+    }
+    out.push({ name, ...b });
+  }
+  return out;
+}
+
+function legacyBackendServiceEntries(contract) {
+  return legacyBackends(contract).map((b) => ({
+    apiVersion: NET,
+    kind: 'ServiceEntry',
+    metadata: { name: b.name, namespace: contract.gateway.namespace },
+    spec: {
+      exportTo: ['.'],
+      location: 'MESH_EXTERNAL',
+      hosts: [b.host],
+      ports: [{ number: LEGACY_PORT, name: 'http-legacy', protocol: 'HTTP', targetPort: 443 }],
+      resolution: 'DNS',
+    },
+  }));
+}
+
+function legacyBackendDestinationRules(contract) {
+  return legacyBackends(contract).map((b) => ({
+    apiVersion: NET,
+    kind: 'DestinationRule',
+    metadata: { name: b.name, namespace: contract.gateway.namespace },
+    spec: {
+      host: b.host,
+      exportTo: ['.'],
+      trafficPolicy: {
+        connectionPool: { tcp: { connectTimeout: '1s' } },
+        outlierDetection: { consecutive5xxErrors: 5, interval: '5s', baseEjectionTime: '30s', maxEjectionPercent: 50 },
+        portLevelSettings: [{ port: { number: LEGACY_PORT }, tls: { mode: 'SIMPLE', sni: b.host, subjectAltNames: [b.host] } }],
+      },
+    },
+  }));
 }
 
 // ------------------------------------------------------------------ sidecars
@@ -527,6 +581,62 @@ function anonymousRateLimit(contract) {
   ];
 }
 
+// Strangler cut-over routes (contract gateway.cutovers), rendered before
+// every prefix route. Each rule becomes one route; its match entries are
+// exact methods with anchored RE2 path regexes (Envoy safe_regex, full match
+// on the path without query string). A cohort rule adds one match entry per
+// cohort client on the gateway-validated claim (@request.auth.claims.<c>,
+// Istio JWT claim routing, gateway only); with no client it is dropped,
+// because a route without match entries matches every request.
+const COHORT_CLIENT = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const NON_TPP_CLIENT = /^(svc-|fintechbankx-)/;
+
+function cutoverRoutes(contract) {
+  const routes = [];
+  const backends = Object.fromEntries(legacyBackends(contract).map((b) => [b.name, b]));
+  for (const c of contract.gateway.cutovers || []) {
+    const [ns, name] = c.target.split('/');
+    const target = serviceWorkloads(contract).find((w) => w.ns === ns && (w.name || w.serviceAccount) === name);
+    if (!target) throw new Error(`cutover ${c.name}: target ${c.target} is not a service workload`);
+    const legacy = backends[c.legacy];
+    if (!legacy) throw new Error(`cutover ${c.name}: legacy backend ${c.legacy} is not in gateway.legacyBackends`);
+    const cohort = c.cohort || { clients: [] };
+    for (const id of cohort.clients || []) {
+      if (typeof id !== 'string' || !COHORT_CLIENT.test(id) || NON_TPP_CLIENT.test(id)) {
+        throw new Error(`cutover ${c.name}: ${cohort.name} entry ${JSON.stringify(id)} must be one literal TPP client id (no wildcard, regex, service or channel client)`);
+      }
+    }
+    if (!/^[a-z0-9_]+$/.test(cohort.claim || 'azp')) throw new Error(`cutover ${c.name}: ${cohort.name} claim must be a plain claim name`);
+    const dest = {
+      target: { host: `${target.serviceAccount}.${ns}.svc.cluster.local`, port: { number: contract.ports.http } },
+      legacy: { host: legacy.host, port: { number: LEGACY_PORT } },
+    };
+    for (const r of c.rules) {
+      if (!dest[r.to]) throw new Error(`cutover ${c.name} ${r.id}: to must be target or legacy`);
+      const base = r.match.map((m) => {
+        if (!/^[A-Z]+$/.test(m.method || '')) throw new Error(`cutover ${c.name} ${r.id}: every match needs one method`);
+        if (!m.regex?.startsWith('^/') || !m.regex.endsWith('$') || /\.[*+]/.test(m.regex)) {
+          throw new Error(`cutover ${c.name} ${r.id}: path regex must be anchored (^/...$) and contain no .* or .+`);
+        }
+        return { uri: { regex: m.regex }, method: { exact: m.method } };
+      });
+      let match = base;
+      if (r.cohort) {
+        if (!(cohort.clients || []).length) continue;
+        const header = `@request.auth.claims.${cohort.claim || 'azp'}`;
+        match = base.flatMap((m) => cohort.clients.map((id) => ({ ...structuredClone(m), headers: { [header]: { exact: id } } })));
+      }
+      routes.push({
+        name: `${c.name}-${r.id.toLowerCase()}`,
+        match,
+        route: [{ destination: dest[r.to] }],
+        headers: forwardedHeaders('API_HOST'),
+      });
+    }
+  }
+  return routes;
+}
+
 function ingressRouting(contract) {
   const gw = contract.gateway;
   const routes = serviceWorkloads(contract)
@@ -575,7 +685,7 @@ function ingressRouting(contract) {
       spec: {
         hosts: ['API_HOST'],
         gateways: [`${gw.namespace}/fintechbankx-public`],
-        http: routes,
+        http: [...cutoverRoutes(contract), ...routes],
       },
     },
     ...anonymousRateLimit(contract),
