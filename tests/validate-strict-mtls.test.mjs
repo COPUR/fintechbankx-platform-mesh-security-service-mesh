@@ -522,3 +522,55 @@ test('R10 fails when the admission policy or its Deny binding is missing', () =>
   audit.find((d) => d.doc.kind === 'ValidatingAdmissionPolicyBinding').doc.spec.validationActions = ['Audit'];
   assert.ok(hasRule(r10(audit), 'R10', 'Deny'));
 });
+
+// ------------------------------------------------------------------ R11
+// consent-authorization-service serves /internal/v1 (never routed) and the
+// token endpoint: a port-only ALLOW would reach both. No service may be
+// reached on /internal/* through any ALLOW path pattern.
+const r11 = (docs) => checkZeroTrust(docs, contract).filter((e) => e.startsWith('R11'));
+const consentPolicy = (docs, caller) =>
+  find(docs, 'AuthorizationPolicy', 'open-finance', `allow-from-${caller}-to-consent-authorization-service`).doc;
+
+test('R11 rejects an ALLOW into consent-authorization-service without paths', () => {
+  assert.deepEqual(r11(deployable()), []);
+  const portOnly = deployable();
+  delete consentPolicy(portOnly, 'payments-payment-bulk-orchestration-service').spec.rules[0].to[0].operation.paths;
+  assert.ok(hasRule(r11(portOnly), 'R11', 'consent-authorization-service without paths'), r11(portOnly).join('\n'));
+
+  const fromOnly = deployable();
+  delete consentPolicy(fromOnly, 'payments-payment-recurring-mandates-service').spec.rules[0].to;
+  assert.ok(hasRule(r11(fromOnly), 'R11', 'consent-authorization-service without paths'), r11(fromOnly).join('\n'));
+
+  // A selector-less ALLOW in open-finance also applies to consent-auth.
+  const nsWide = deployable();
+  nsWide.push({
+    file: 'inline.yaml', index: 0,
+    doc: {
+      apiVersion: 'security.istio.io/v1', kind: 'AuthorizationPolicy', metadata: { name: 'ns-wide', namespace: 'open-finance' },
+      spec: { action: 'ALLOW', rules: [{ from: [{ source: { principals: ['cluster.local/ns/payments/sa/payment-initiation-settlement-service'] } }], to: [{ operation: { ports: ['8080'] } }] }] },
+    },
+  });
+  assert.ok(hasRule(r11(nsWide), 'R11', 'ns-wide'), r11(nsWide).join('\n'));
+});
+
+test('R11 rejects any ALLOW path pattern that covers /internal/* on any service', () => {
+  for (const p of ['/internal/*', '/internal/v1/consents', '/internal', '/*', '*', '/int*', '*/consents', '/{*}/v1/x', '/{**}', '/internal/{**}']) {
+    const docs = deployable();
+    find(docs, 'AuthorizationPolicy', 'risk', 'allow-from-payments-payment-initiation-settlement-service-to-risk-decisioning-service')
+      .doc.spec.rules[0].to[0].operation.paths = [p];
+    assert.ok(hasRule(r11(docs), 'R11', `covers /internal/*`), `${p}: ${r11(docs).join('\n')}`);
+  }
+  for (const p of ['/api/v1/risk/*', '/internals', '/v1/internal/x', '/api/{*}/internal']) {
+    const docs = deployable();
+    find(docs, 'AuthorizationPolicy', 'risk', 'allow-from-payments-payment-initiation-settlement-service-to-risk-decisioning-service')
+      .doc.spec.rules[0].to[0].operation.paths = [p];
+    assert.deepEqual(r11(docs), [], p);
+  }
+  // An explicit /internal/* exclusion makes a broad pattern acceptable.
+  const excluded = deployable();
+  Object.assign(
+    find(excluded, 'AuthorizationPolicy', 'risk', 'allow-from-payments-payment-initiation-settlement-service-to-risk-decisioning-service').doc.spec.rules[0].to[0].operation,
+    { paths: ['/*'], notPaths: ['/internal/*'] },
+  );
+  assert.deepEqual(r11(excluded), []);
+});

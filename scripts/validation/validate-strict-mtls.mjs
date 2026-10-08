@@ -30,6 +30,11 @@
 //     app.kubernetes.io/name label, one of the namespace's service accounts);
 //     the ValidatingAdmissionPolicy enforcing this at admission exists with a
 //     Deny binding. Static checks only: the CEL itself runs in the apiserver.
+//  R11 no ALLOW rule into open-finance/consent-authorization-service without
+//     paths (port-only or from-only rules reach /internal/v1 and
+//     /oauth2/token), including selector-less ALLOWs in open-finance; and no
+//     ALLOW path pattern on any workload covers /internal/* unless the same
+//     operation excludes /internal/* in notPaths.
 // R1 applies to every YAML file in the repo (including legacy folders);
 // R2-R7 apply to the deployable set (deploy/, k8s/platform/) or a rendered file.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -218,6 +223,7 @@ export function checkZeroTrust(docs, contract) {
     if (!deny) errors.push(`R7 namespace ${n.name} has no DENY policy for /api/* without a JWT`);
   }
   errors.push(...checkSecretScoping(docs, contract));
+  errors.push(...checkInternalPaths(aps));
 
   // R9
   const excepted = new Set((contract.exceptions?.workloadInjection || []).map((x) => x.workload));
@@ -226,6 +232,54 @@ export function checkZeroTrust(docs, contract) {
       const ref = `${n.name}/${w.name || w.serviceAccount}`;
       if (w.sidecar === false && !excepted.has(ref)) {
         errors.push(`R9 ${ref} runs without a sidecar but has no exceptions.workloadInjection entry`);
+      }
+    }
+  }
+  return errors;
+}
+
+// Workloads whose every ALLOW rule must name its paths.
+const PATH_SCOPED_CALLEES = [{ ns: 'open-finance', name: 'consent-authorization-service' }];
+
+/** Can an Istio path pattern match a path under /internal/? */
+export function coversInternal(p) {
+  if (p.startsWith('*')) return true; // "*" or suffix match: any prefix
+  if (p.includes('{')) {
+    const first = p.split('/')[1];
+    return first === 'internal' || first === '{*}' || first === '{**}';
+  }
+  if (p.endsWith('*')) {
+    const prefix = p.slice(0, -1);
+    return '/internal/'.startsWith(prefix) || prefix.startsWith('/internal/');
+  }
+  return p === '/internal' || p.startsWith('/internal/');
+}
+const excludesInternal = (op) => (op.notPaths || []).some((n) => ['/internal/*', '/internal*'].includes(n));
+
+/** R11 - path-scoped access to consent-auth and nothing reaches /internal/*. */
+export function checkInternalPaths(aps) {
+  const errors = [];
+  for (const d of aps) {
+    const spec = d.doc.spec || {};
+    if (isEmpty(spec) || (spec.action || 'ALLOW') !== 'ALLOW') continue;
+    const ns = d.doc.metadata?.namespace;
+    const app = spec.selector?.matchLabels?.['app.kubernetes.io/name'];
+    for (const c of PATH_SCOPED_CALLEES) {
+      if (ns !== c.ns || (app !== undefined && app !== c.name)) continue;
+      for (const rule of spec.rules || []) {
+        const to = rule.to || [];
+        if (to.length === 0 || to.some((t) => (t.operation?.paths || []).length === 0)) {
+          errors.push(`R11 ${where(d)}: ALLOW into ${c.name} without paths (reaches /internal/* and every other endpoint)`);
+        }
+      }
+    }
+    for (const rule of spec.rules || []) {
+      for (const t of rule.to || []) {
+        const op = t.operation || {};
+        if (excludesInternal(op)) continue;
+        for (const p of (op.paths || []).filter(coversInternal)) {
+          errors.push(`R11 ${where(d)}: path ${p} covers /internal/*`);
+        }
       }
     }
   }
