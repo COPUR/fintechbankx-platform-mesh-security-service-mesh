@@ -52,6 +52,73 @@ Bu repository, FinTechBankX DDD/EDA dönüşümünde **svc-msh-security** servis
 - [Capability Map (PUML)](https://github.com/COPUR/fintechbankx-governance-architecture-enablement-enterprise-architecture/blob/main/docs/puml/service-mesh/enterprise-capability-map.puml)
 - [Bu Repo Dokümantasyonu](./docs)
 
+## Deployable mesh baseline (Proposed)
+
+This repository provides the Istio service mesh and zero-trust network layer
+for every FinTechBankX bounded context. It contains platform infrastructure
+only, no domain logic. Status: **Proposed**; validated locally (render,
+schema, policy checks), never applied to a cluster.
+
+| Path | What it is |
+|---|---|
+| [contracts/mesh-contract.yaml](contracts/mesh-contract.yaml) | Source of truth: namespaces, service accounts, call edges, exceptions, gaps |
+| [deploy/istio](deploy/istio) | Istio 1.24.3 Helm values (base, istiod HA, ingress gateway behind AWS NLB), per-env overrides |
+| [deploy/kustomize](deploy/kustomize) | Base (generated policies) + overlays `dev`, `staging`, `prod` with `params.env` |
+| [k8s/platform/external-secrets](k8s/platform/external-secrets) | ClusterSecretStore `aws-secrets-manager` (IRSA, SA `external-secrets`) |
+| [scripts/generate](scripts/generate) | Renders `deploy/kustomize/base/generated/*.yaml` from the contract |
+| [scripts/validation](scripts/validation) | `npm run validate:strict-mtls` (rules R1-R8) |
+| [scripts/ci/validate-manifests.sh](scripts/ci/validate-manifests.sh) | kustomize build, kubeconform with Istio/ESO CRD schemas, istioctl analyze, helm template |
+| [scripts/istio/install-mesh.sh](scripts/istio/install-mesh.sh) | Install order (prints a plan unless `--apply`) |
+| [docs/mesh/DEPLOYABLE_MESH_BASELINE.md](docs/mesh/DEPLOYABLE_MESH_BASELINE.md) | Call graph, gaps, resilience mapping, exceptions, drift fixed |
+
+What it enforces: mesh-wide STRICT mTLS (`PeerAuthentication default` in
+`istio-system`, no PERMISSIVE/DISABLE anywhere), `default-deny`
+AuthorizationPolicy and NetworkPolicy per namespace, ALLOW rules per caller
+SPIFFE principal `cluster.local/ns/<ns>/sa/<sa>` for each real call edge,
+Keycloak JWT validation (issuer at the gateway; issuer + `aud` = service id per
+workload), a JWT required on `/api/**`, `outboundTrafficPolicy: REGISTRY_ONLY`
+with ServiceEntries for Aurora, MSK, AWS APIs and the identity host,
+DestinationRules with connection pools, outlier detection and locality-aware
+load balancing.
+
+### How a service consumes the mesh
+
+A service chart must (platform contract addendum, 2026-10-08):
+
+- install into its context namespace (`lending`, `payments`, `customer`,
+  `risk`, `compliance`, `open-finance`); these and `identity`,
+  `observability` are injected. `istio-system`, `kube-system`,
+  `external-secrets` and `kafka` are not;
+- use the service account named in the contract (= chart name), with pod labels
+  `app.kubernetes.io/name=<sa>`, `app=<sa>`, `version=<semver or sha>`,
+  `fintechbankx.io/service-id=<service id>`, `sidecar.istio.io/inject: "true"`;
+- name Service ports `http` (8080) and `http-management` (8081) so Istio
+  detects the protocol; serve `/actuator/health/{liveness,readiness}` and
+  `/actuator/prometheus` on 8081;
+- not set `traffic.sidecar.istio.io/excludeInboundPorts` (probes use Istio's
+  probe rewrite) and not ship a PeerAuthentication or DestinationRule that
+  weakens mTLS;
+- reference secrets through ClusterSecretStore `aws-secrets-manager`
+  (`platform-secrets` is not valid);
+- validate JWT issuer `https://<identity-host>/realms/fintechbankx` and an
+  `aud` containing its own service id.
+
+A new call edge is added to `contracts/mesh-contract.yaml` (with evidence),
+then `npm run generate`; the validator rejects principals that are not in the
+contract.
+
+### Validate locally
+
+```bash
+npm ci && npm test && npm run validate:strict-mtls
+bash scripts/ci/validate-manifests.sh   # needs kustomize, kubeconform, helm, istioctl
+```
+
+Legacy material from the monolith extraction (`k8s/istio/security`,
+`k8s/istio/local`, `security/`, `scripts/istio/install-istio.sh`) uses a
+single `banking` namespace and is kept for reference; it is not part of the
+deployable set. `k8s/istio/local` remains the kind-based local sandbox.
+
 ## Güvenlik ve Uyumluluk Notları
 - Gerçek secret değerleri repo veya `.env` içinde tutulmaz.
 - Secret üretim/rotasyon olayları merkezi log/SIEM'e taşınır.
@@ -60,13 +127,6 @@ Bu repository, FinTechBankX DDD/EDA dönüşümünde **svc-msh-security** servis
 ## Katkı
 - Katkı süreci için `CONTRIBUTING.md` ve squad runbook'ları izlenmelidir.
 - PR'larda mimari kararlar ADR veya backlog referansı ile ilişkilendirilmelidir.
-
-## Cell-Based Architecture
-
-This repository participates in the FinTechBankX cell-based resilience program.
-
-- Plan: \
-- Backlog: \
 
 <!-- cell-architecture-start -->
 ## Cell-Based Architecture
