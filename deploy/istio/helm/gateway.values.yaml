@@ -39,6 +39,14 @@ topologySpreadConstraints:
 
 terminationGracePeriodSeconds: 60
 
+# No trusted proxy in front of the gateway: the NLB passes no client address
+# (no proxy protocol, preserve_client_ip off), so client-sent X-Forwarded-For
+# entries are never trusted hops. Services build the DPoP htu from the
+# X-Forwarded-Proto/Host/Port the gateway routes overwrite, never from XFF.
+# Merged with the chart's default podAnnotations.
+podAnnotations:
+  proxy.istio.io/config: '{"gatewayTopology": {"numTrustedProxies": 0}}'
+
 service:
   type: LoadBalancer
   externalTrafficPolicy: ""

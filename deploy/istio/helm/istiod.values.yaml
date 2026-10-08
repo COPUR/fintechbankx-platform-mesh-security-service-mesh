@@ -32,6 +32,14 @@ topologySpreadConstraints:
 env:
   # istiod fetches the Keycloak JWKS itself and pushes it to proxies.
   PILOT_JWT_ENABLE_REMOTE_JWKS: "false"
+  # Native sidecars (restartable init containers, Kubernetes 1.29+; EKS 1.31):
+  # the proxy starts before and stops after the application container, so
+  # graceful shutdown (in-flight requests, outbox relay sends to MSK through
+  # the sidecar) is not cut off by Envoy's drain, and Jobs (Flyway
+  # migrations, realm import) complete with a sidecar. Request-to-pay PR #14
+  # review. Pods still bound their total shutdown with
+  # terminationGracePeriodSeconds.
+  ENABLE_NATIVE_SIDECARS: "true"
 
 global:
   # Mirror docker.io/istio images into ECR and set hub here for production.
