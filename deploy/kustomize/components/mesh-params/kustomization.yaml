@@ -31,6 +31,10 @@ replacements:
         fieldPaths: [spec.egress.0.to.0.ipBlock.cidr]
       - select: {kind: NetworkPolicy, name: allow-ingress-node-health}
         fieldPaths: [spec.ingress.0.from.0.ipBlock.cidr]
+      - select: {kind: NetworkPolicy, name: allow-egress-prometheus-nodes}
+        fieldPaths: [spec.egress.0.to.0.ipBlock.cidr]
+      - select: {kind: NetworkPolicy, name: allow-ingress-operator-webhook}
+        fieldPaths: [spec.ingress.0.from.0.ipBlock.cidr]
   - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.AURORA_CIDR}
     targets:
       - select: {kind: NetworkPolicy, name: allow-egress-aurora}
@@ -66,10 +70,22 @@ replacements:
       - select: {kind: ServiceEntry, name: msk-brokers}
         fieldPaths: [spec.hosts.0]
         options: {delimiter: ., index: 2}
+      - select: {kind: ServiceEntry, name: aws-observability-apis}
+        fieldPaths: [spec.hosts.0, spec.hosts.1, spec.hosts.2]
+        options: {delimiter: ., index: 1}
+      - select: {kind: ServiceEntry, name: aws-s3}
+        fieldPaths: [spec.hosts.0]
+        options: {delimiter: ., index: 1}
+      - select: {kind: ServiceEntry, name: aws-s3}
+        fieldPaths: [spec.hosts.1]
+        options: {delimiter: ., index: 2}
       - select: {kind: ClusterSecretStore, name: aws-secrets-manager}
         fieldPaths: [spec.provider.aws.region]
   - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.ENVIRONMENT}
     targets:
       - select: {kind: ExternalSecret, name: fintechbankx-ingress-tls}
+        fieldPaths: [spec.data.0.remoteRef.key, spec.data.1.remoteRef.key]
+        options: {delimiter: /, index: 0}
+      - select: {kind: ExternalSecret, name: fintechbankx-internal-ca-keypair}
         fieldPaths: [spec.data.0.remoteRef.key, spec.data.1.remoteRef.key]
         options: {delimiter: /, index: 0}

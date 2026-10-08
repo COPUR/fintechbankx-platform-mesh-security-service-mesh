@@ -344,6 +344,21 @@ function serviceEntries(contract) {
       ports: x.msk.ports.map((p) => ({ number: p, name: `tls-msk-${p}`, protocol: 'TLS' })),
       resolution: 'NONE',
     }),
+    se('aws-s3', {
+      hosts: x['aws-s3'].hosts,
+      ports: [{ number: 443, name: 'tls', protocol: 'TLS' }],
+      resolution: 'NONE',
+    }),
+    se('aws-observability-apis', {
+      hosts: x['aws-observability-apis'].hosts,
+      ports: [{ number: 443, name: 'tls', protocol: 'TLS' }],
+      resolution: 'DNS',
+    }),
+    se('alert-receivers', {
+      hosts: x['alert-receivers'].hosts,
+      ports: [{ number: 443, name: 'tls', protocol: 'TLS' }],
+      resolution: 'DNS',
+    }),
     se('aws-apis', {
       hosts: x['aws-apis'].hosts,
       ports: [{ number: 443, name: 'tls', protocol: 'TLS' }],
@@ -544,20 +559,32 @@ function networkPolicies(contract) {
     }
 
     // Datastores: egress only for the workloads that declare the store.
+    const x = contract.externalDependencies;
     const storePorts = {
-      'aurora-postgresql': ['allow-egress-aurora', [contract.externalDependencies['aurora-postgresql'].port]],
-      msk: ['allow-egress-msk', contract.externalDependencies.msk.ports],
-      documentdb: ['allow-egress-documentdb', [contract.externalDependencies.documentdb.port]],
-      'elasticache-redis': ['allow-egress-redis', [contract.externalDependencies['elasticache-redis'].port]],
+      'aurora-postgresql': ['allow-egress-aurora', [x['aurora-postgresql'].port]],
+      msk: ['allow-egress-msk', x.msk.ports],
+      documentdb: ['allow-egress-documentdb', [x.documentdb.port]],
+      'elasticache-redis': ['allow-egress-redis', [x['elasticache-redis'].port]],
+      // Public endpoints: the CIDR is fixed in the contract, hosts are limited by REGISTRY_ONLY.
+      'aws-s3': ['allow-egress-aws-s3', [x['aws-s3'].port], x['aws-s3'].cidr],
+      'alert-receivers': ['allow-egress-alert-receivers', [x['alert-receivers'].port], x['alert-receivers'].cidr],
     };
-    for (const [store, [name, ports]] of Object.entries(storePorts)) {
-      const users = (n.workloads || []).filter((w) => (w.datastores || []).includes(store)).map((w) => w.serviceAccount);
+    for (const [store, [name, ports, cidr]] of Object.entries(storePorts)) {
+      const users = (n.workloads || [])
+        .filter((w) => (w.datastores || []).includes(store))
+        .map((w) => {
+          const sel = resolveWorkload(contract, ns, w.name || w.serviceAccount).selector;
+          if (Object.keys(sel).length !== 1 || !sel['app.kubernetes.io/name']) {
+            throw new Error(`${ns}/${w.serviceAccount}: datastore egress needs a selector on app.kubernetes.io/name only`);
+          }
+          return sel['app.kubernetes.io/name'];
+        });
       if (!users.length) continue;
       docs.push(
         np(ns, name, {
-          podSelector: { matchExpressions: [{ key: 'app.kubernetes.io/name', operator: 'In', values: users.sort() }] },
+          podSelector: { matchExpressions: [{ key: 'app.kubernetes.io/name', operator: 'In', values: [...new Set(users)].sort() }] },
           policyTypes: ['Egress'],
-          egress: [{ to: [{ ipBlock: { cidr: PLACEHOLDER_CIDR } }], ports: tcp(ports) }],
+          egress: [{ to: [{ ipBlock: { cidr: cidr || PLACEHOLDER_CIDR } }], ports: tcp(ports) }],
         }),
       );
     }
@@ -647,11 +674,31 @@ function networkPolicies(contract) {
           egress: [
             {
               to: [{ namespaceSelector: {} }],
-              ports: tcp([contract.ports.management, 15014, 15020, 15090]),
+              ports: tcp([contract.ports.management, 9153, 15014, 15020, 15090]),
             },
           ],
         }),
       );
+      // Node targets: node-exporter (hostNetwork 9100) and kubelet/cAdvisor (10250).
+      docs.push(
+        np(ns, 'allow-egress-prometheus-nodes', {
+          podSelector: { matchLabels: nameLabel('prometheus') },
+          policyTypes: ['Egress'],
+          egress: [{ to: [{ ipBlock: { cidr: PLACEHOLDER_CIDR } }], ports: tcp([9100, 10250]) }],
+        }),
+      );
+      // Workloads without a sidecar (exceptions.workloadInjection) that the
+      // kube-apiserver calls: the prometheus-operator admission webhook.
+      const operator = resolveWorkload(contract, ns, 'prometheus-operator');
+      if (!operator.sidecar) {
+        docs.push(
+          np(ns, 'allow-ingress-operator-webhook', {
+            podSelector: { matchLabels: operator.selector },
+            policyTypes: ['Ingress'],
+            ingress: [{ from: [{ ipBlock: { cidr: PLACEHOLDER_CIDR } }], ports: tcp([10250]) }],
+          }),
+        );
+      }
     }
     // Platform namespaces run several cooperating components (Tempo, Loki, Grafana; Keycloak, LDAP).
     if (lookup[ns].kind === 'platform' && (n.workloads || []).length > 1) {

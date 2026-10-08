@@ -19,6 +19,8 @@
 //     as audience, and its namespace a DENY policy for /api/** without JWT
 //     (unless exceptions.requestAuthentication).
 //  R8 generated manifests match the contract rendering.
+//  R9 every workload declared without a sidecar is listed in
+//     exceptions.workloadInjection.
 // R1 applies to every YAML file in the repo (including legacy folders);
 // R2-R7 apply to the deployable set (deploy/, k8s/platform/) or a rendered file.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -204,6 +206,16 @@ export function checkZeroTrust(docs, contract) {
         ),
     );
     if (!deny) errors.push(`R7 namespace ${n.name} has no DENY policy for /api/* without a JWT`);
+  }
+  // R9
+  const excepted = new Set((contract.exceptions?.workloadInjection || []).map((x) => x.workload));
+  for (const n of contract.namespaces) {
+    for (const w of n.workloads || []) {
+      const ref = `${n.name}/${w.name || w.serviceAccount}`;
+      if (w.sidecar === false && !excepted.has(ref)) {
+        errors.push(`R9 ${ref} runs without a sidecar but has no exceptions.workloadInjection entry`);
+      }
+    }
   }
   return errors;
 }

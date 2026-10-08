@@ -1,0 +1,10 @@
+# Internal TLS for the platform (Proposed): the internal CA as a cert-manager
+# ClusterIssuer and its public certificate as a trust-manager Bundle.
+# Requires cert-manager and trust-manager installed with their default
+# cluster-resource / trust namespace `cert-manager`.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - internal-ca-externalsecret.yaml
+  - cluster-issuer.yaml
+  - bundle-internal-ca.yaml

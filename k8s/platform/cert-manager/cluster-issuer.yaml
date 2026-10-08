@@ -1,0 +1,12 @@
+# Issues in-cluster server certificates that are not mesh identities (for
+# example openldap-tls for LDAP StartTLS in the identity repo). Workload
+# mTLS stays with istiod; this CA is not the mesh root.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: fintechbankx-internal-ca
+  labels:
+    fintechbankx.io/context: platform
+spec:
+  ca:
+    secretName: fintechbankx-internal-ca-keypair

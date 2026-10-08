@@ -61,6 +61,8 @@ selected per workload, not per namespace.
 | Traffic | `generated/destination-rules.yaml`, `generated/service-entries.yaml`, `generated/sidecars.yaml`, `generated/ingress-routing.yaml` | See resilience mapping |
 | NetworkPolicy | `generated/network-policies.yaml` | Default-deny, DNS, istiod 15012, node health 15020/15021, scraping, edge-derived ingress/egress, Aurora/MSK/VPC-endpoint CIDRs |
 | Secrets | `k8s/platform/external-secrets/cluster-secret-store.yaml`, `deploy/kustomize/base/ingress-tls-externalsecret.yaml` | `aws-secrets-manager` via IRSA; gateway TLS from `<env>/platform/ingress-tls` |
+| Internal TLS | `k8s/platform/cert-manager/` | ClusterIssuer `fintechbankx-internal-ca` (CA issuer; key pair synced by ExternalSecret from `<env>/platform/internal-ca` into ns `cert-manager`, no material in git); trust-manager Bundle `fintechbankx-internal-ca` -> ConfigMap `fintechbankx-internal-ca` (key `ca.crt`) in every namespace labelled `fintechbankx.io/namespace-kind` |
+| Corporate directory (prod only) | `deploy/kustomize/components/corporate-directory/` | Bundle `corporate-directory-ca` -> ConfigMap in `identity` (source: ExternalSecret from `<env>/platform/corporate-directory-ca`); ServiceEntry + NetworkPolicy for Keycloak -> `DIRECTORY_HOST:636` (LDAPS) |
 | Params | `deploy/kustomize/overlays/<env>/params.env`, `components/mesh-params` | Identity/API host, region, VPC/Aurora/MSK/DocumentDB/Redis CIDRs, environment |
 
 ### Resilience mapping
@@ -89,14 +91,77 @@ Only values backed by the dependency-resilience policy pack are set:
   text, allowed by NetworkPolicy from `observability/prometheus`). A Prometheus
   with its own sidecar can also scrape 8081 over mTLS; the AuthZ rule allows it.
 
+## Identity namespace
+
+| Caller | Callee | Port | Notes |
+|---|---|---|---|
+| every service workload, ingress gateway (realm paths), Grafana (token, userinfo, certs) | keycloak | 8080 | path-scoped ALLOW |
+| keycloak-realm-import (Job, native sidecar) | keycloak | 8080 | `/`, `/admin/*`, `/realms/*` (keycloak-config-cli) |
+| keycloak | openldap | 389 | StartTLS; 636 not exposed (dev/staging) |
+| keycloak | keycloak | 7800, 57800 | JGroups TCP and FD_SOCK2 failure detection |
+| observability/prometheus | keycloak | 9000 | `/metrics`, `/health*` (Keycloak management port; exception to 8081) |
+| keycloak (prod) | corporate directory | 636 | ServiceEntry `corporate-directory`, NetworkPolicy to `DIRECTORY_CIDR` |
+
+**JGroups under STRICT mTLS (analysis, not drilled).** Keycloak 26 discovers
+peers with JDBC_PING and connects to pod IPs on 7800 (and 57800 for FD_SOCK2).
+No port exclusion is needed for mTLS: Istio 1.10+ forwards inbound traffic to
+the pod IP, the payload is opaque TCP inside the sidecar mTLS, and Keycloak's
+own JGroups TLS runs inside it. The constraint is `REGISTRY_ONLY`: an outbound
+connection to `podIP:port` is only routed (with mTLS) if a Service lists that
+pod and port; otherwise it is blackholed. The Keycloak Operator's headless
+discovery Service is expected to declare 7800, but 57800 is not known to be
+declared, so the identity repo should add a headless Service selecting the
+Keycloak pods with `tcp-jgroups` 7800 and `tcp-jgroups-fd` 57800. If a drill
+still shows split clusters, the fallback is
+`traffic.sidecar.istio.io/excludeOutboundPorts` and `excludeInboundPorts`
+"7800,57800" on the Keycloak pods. That would take JGroups out of the mesh,
+needs a documented exception, and conflicts with the addendum's "no
+excludeInboundPorts" rule. Drill evidence: `kubectl exec` into a Keycloak pod,
+check the cluster view in the logs (`ISPN000094` with 3 members), and check
+for `BlackHoleCluster` hits in `istio-proxy` stats.
+
+## Observability namespace
+
+Selectors come from `helm template` of the pinned observability charts with
+the observability repo's values. Both OTel collectors carry
+`app.kubernetes.io/name=opentelemetry-collector` and differ by
+`app.kubernetes.io/instance`. Before this change the mesh selected
+`app.kubernetes.io/name=otel-collector`, which matches no pod.
+
+| Caller (SA) | Callee | Port |
+|---|---|---|
+| every meshed workload + ingress gateway | otel-collector (agent) | 4317, 4318 (app OTLP and Envoy tracing) |
+| otel-collector | otel-gateway | 4317 |
+| otel-gateway | tempo-distributor 4317; loki-gateway 8080 (`POST /otlp/*`); prometheus 9090 (`POST /api/v1/write`) | |
+| tempo (metrics-generator; shared SA `tempo`) | prometheus | 9090 `POST /api/v1/write` |
+| grafana | prometheus 9090, loki-gateway 8080, tempo-query-frontend 3100, alertmanager 9093, identity/keycloak 8080 | |
+| ingress gateway | grafana | 3000 (no route yet: needs a Grafana host) |
+| prometheus | otel-collector/gateway 8888, tempo 3100, loki 3100/8080/9150, grafana 3000, alertmanager 9093, prometheus 9090, yace 5000, kube-state-metrics 8080, keycloak 9000; service pods 8081/15020/15090; istiod 15014; CoreDNS 9153; nodes 9100/10250 | |
+| tempo -> tempo, loki -> loki, alertmanager -> alertmanager | 3100/4317/4318/7946/9095/11211; 3100/7946/9095/11211; 9094 | |
+
+Prometheus bypasses its own sidecar outbound and presents its Istio
+certificate itself (observability repo), so the server-side sidecars still see
+the `prometheus` principal. It is also not subject to `REGISTRY_ONLY`.
+Memberlist and Alertmanager gossip also use UDP, which Istio does not
+intercept. Only `allow-same-namespace` NetworkPolicy covers it, in plain text.
+Egress: Tempo and Loki to S3 (ServiceEntry `aws-s3`; NetworkPolicy
+`0.0.0.0/0:443` because the S3 gateway endpoint uses public prefixes),
+Alertmanager to `hooks.slack.com` and `events.pagerduty.com`, AMP, CloudWatch
+and tagging through VPC endpoints (`aws-observability-apis`), and Grafana to
+Aurora. Observability backends get no DestinationRule (Istio defaults).
+`meshConfig.defaultConfig.proxyStatsMatcher` includes the Envoy `ssl.*`
+handshake and failure counters for `MeshMtlsHandshakeFailures`.
+
 ## Exceptions (enforced by the validator)
 
 | Kind | Namespace | Reason |
 |---|---|---|
 | injection | istio-system | Control plane |
 | injection | external-secrets | Platform contract addendum; ESO webhook is called by the kube-apiserver |
+| injection | cert-manager | cert-manager / trust-manager webhooks are called by the kube-apiserver; holds the internal CA key pair |
+| workloadInjection (R9) | observability/prometheus-operator, kube-state-metrics, node-exporter | API-server webhook and Jobs; scrape-only; hostNetwork. NetworkPolicy only, never a principal |
 | requestAuthentication | open-finance | Own DPoP/FAPI tokens with a per-service issuer; open data is public |
-| networkPolicyDefaultDeny | istio-system, external-secrets | Webhooks called from EKS control-plane ENIs; not yet drilled |
+| networkPolicyDefaultDeny | istio-system, external-secrets, cert-manager | Webhooks called from EKS control-plane ENIs; not yet drilled |
 
 There is no PeerAuthentication exception: no PERMISSIVE or DISABLE anywhere.
 
@@ -104,7 +169,7 @@ There is no PeerAuthentication exception: no PERMISSIVE or DISABLE anywhere.
 
 ```bash
 npm ci
-npm test                               # 18 node:test cases (validator + contract)
+npm test                               # 21 node:test cases (validator + contract)
 npm run validate:strict-mtls           # R1..R8 on the repo sources
 bash scripts/ci/validate-manifests.sh  # kustomize build x3, kubeconform (Istio/ESO CRD
                                        # schemas from datreeio CRDs-catalog), validator on

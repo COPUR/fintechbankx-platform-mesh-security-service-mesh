@@ -57,9 +57,22 @@ meshConfig:
     mode: REGISTRY_ONLY
   accessLogFile: /dev/stdout
   accessLogEncoding: JSON
+  # Sidecar agent serves app + Envoy metrics on 15020 (/stats/prometheus);
+  # Prometheus scrapes service pods there, outside mTLS interception.
   enablePrometheusMerge: true
   defaultConfig:
     holdApplicationUntilProxyStarts: true
+    # Envoy TLS stats for the observability alert MeshMtlsHandshakeFailures
+    # (envoy_listener_ssl_* / envoy_cluster_ssl_*). Suffixes keep cardinality
+    # to the handshake and failure counters.
+    proxyStatsMatcher:
+      inclusionSuffixes:
+        - ssl.handshake
+        - ssl.connection_error
+        - ssl.fail_verify_error
+        - ssl.fail_verify_san
+        - ssl.fail_verify_no_cert
+        - ssl.no_certificate
     proxyMetadata:
       ISTIO_META_DNS_CAPTURE: "true"
       ISTIO_META_DNS_AUTO_ALLOCATE: "true"

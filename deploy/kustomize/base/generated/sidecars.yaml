@@ -118,6 +118,7 @@ spec:
     - hosts:
         - ./*
         - istio-system/*
+        - observability/*
   outboundTrafficPolicy:
     mode: REGISTRY_ONLY
 ---
@@ -132,6 +133,7 @@ spec:
         - ./*
         - compliance/*
         - customer/*
+        - identity/*
         - istio-system/*
         - lending/*
         - open-finance/*

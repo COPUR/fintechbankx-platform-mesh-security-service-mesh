@@ -98,3 +98,12 @@ metadata:
     fintechbankx.io/context: platform
     istio-injection: disabled
     fintechbankx.io/namespace-kind: platform
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  labels:
+    fintechbankx.io/context: platform
+    istio-injection: disabled
+    fintechbankx.io/namespace-kind: platform

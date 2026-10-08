@@ -124,36 +124,6 @@ spec:
 apiVersion: networking.istio.io/v1
 kind: DestinationRule
 metadata:
-  name: otel-collector
-  namespace: observability
-spec:
-  host: otel-collector.observability.svc.cluster.local
-  exportTo:
-    - "*"
-  trafficPolicy:
-    loadBalancer:
-      simple: LEAST_REQUEST
-      localityLbSetting:
-        enabled: true
-    connectionPool:
-      tcp:
-        connectTimeout: 1s
-        maxConnections: 512
-      http:
-        http1MaxPendingRequests: 256
-        http2MaxRequests: 1024
-        maxRetries: 3
-        idleTimeout: 300s
-    outlierDetection:
-      consecutiveGatewayErrors: 3
-      consecutive5xxErrors: 5
-      interval: 5s
-      baseEjectionTime: 30s
-      maxEjectionPercent: 50
----
-apiVersion: networking.istio.io/v1
-kind: DestinationRule
-metadata:
   name: atm-directory-service
   namespace: open-finance
 spec:

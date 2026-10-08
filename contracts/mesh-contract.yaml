@@ -143,24 +143,114 @@ namespaces:
   - name: identity
     context: identity
     kind: platform
+    # From fintechbankx-platform-identity-iam-keycloak-ldap deploy/kustomize
+    # (Keycloak Operator CR, OpenLDAP component for dev/staging, realm import Job).
     workloads:
       - serviceAccount: keycloak
-        serviceId: platform-identity-keycloak
+        serviceId: svc-idn-keycloak-ldap
         sourceRepo: fintechbankx-platform-identity-iam-keycloak-ldap
         datastores: [aurora-postgresql]
       - serviceAccount: openldap
         serviceId: platform-identity-openldap
         sourceRepo: fintechbankx-platform-identity-iam-keycloak-ldap
+        destinationRule: false
+      # keycloak-config-cli Job; native sidecar (sidecar.istio.io/nativeSidecar)
+      # so the Job completes inside the mesh.
+      - serviceAccount: keycloak-realm-import
+        serviceId: platform-identity-realm-import
+        sourceRepo: fintechbankx-platform-identity-iam-keycloak-ldap
+        service: null
   - name: observability
     context: observability
     kind: platform
+    # From fintechbankx-platform-observability-sre-operations deploy/values
+    # (helm template of the pinned charts). Selectors are the chart pod labels;
+    # several Tempo and Loki components share one service account, so their
+    # principal is the same and only the pod selector differs.
+    # Observability backends keep Istio defaults (destinationRule: false):
+    # outlier ejection on stateful ingesters and the Prometheus HA pair would
+    # do more harm than good.
     workloads:
       - serviceAccount: otel-collector
         serviceId: platform-observability-otel-collector
         sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: opentelemetry-collector, app.kubernetes.io/instance: otel-collector}
+        destinationRule: false
+      - serviceAccount: otel-gateway
+        serviceId: platform-observability-otel-gateway
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: opentelemetry-collector, app.kubernetes.io/instance: otel-gateway}
+        destinationRule: false
       - serviceAccount: prometheus
         serviceId: platform-observability-prometheus
         sourceRepo: fintechbankx-platform-observability-sre-operations
+        # Bypasses its sidecar outbound (includeOutboundIPRanges "") and
+        # scrapes with the Istio workload certificate (OUTPUT_CERTS).
+        destinationRule: false
+      - serviceAccount: kube-prometheus-stack-alertmanager
+        name: alertmanager
+        serviceId: platform-observability-alertmanager
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: alertmanager}
+        destinationRule: false
+        datastores: [alert-receivers]
+      - serviceAccount: grafana
+        serviceId: platform-observability-grafana
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        destinationRule: false
+        datastores: [aurora-postgresql]
+      - serviceAccount: tempo
+        serviceId: platform-observability-tempo
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        destinationRule: false
+        datastores: [aws-s3]
+      - serviceAccount: tempo
+        name: tempo-distributor
+        serviceId: platform-observability-tempo
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: tempo, app.kubernetes.io/component: distributor}
+        destinationRule: false
+      - serviceAccount: tempo
+        name: tempo-query-frontend
+        serviceId: platform-observability-tempo
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: tempo, app.kubernetes.io/component: query-frontend}
+        destinationRule: false
+      - serviceAccount: tempo
+        name: tempo-metrics-generator
+        serviceId: platform-observability-tempo
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: tempo, app.kubernetes.io/component: metrics-generator}
+        destinationRule: false
+      - serviceAccount: loki
+        serviceId: platform-observability-loki
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        destinationRule: false
+        datastores: [aws-s3]
+      - serviceAccount: loki
+        name: loki-gateway
+        serviceId: platform-observability-loki
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: loki, app.kubernetes.io/component: gateway}
+        destinationRule: false
+      - serviceAccount: yace
+        serviceId: platform-observability-yace
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        destinationRule: false
+      # No sidecar (documented exception below): NetworkPolicy only, never a
+      # principal in an AuthorizationPolicy.
+      - serviceAccount: kube-prometheus-stack-kube-state-metrics
+        name: kube-state-metrics
+        serviceId: platform-observability-kube-state-metrics
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: kube-state-metrics}
+        sidecar: false
+      - serviceAccount: kube-prometheus-stack-operator
+        name: prometheus-operator
+        serviceId: platform-observability-prometheus-operator
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: kube-prometheus-stack-prometheus-operator}
+        sidecar: false
   - name: istio-ingress
     context: platform
     kind: platform
@@ -181,6 +271,13 @@ namespaces:
     kind: platform
     injection: disabled
     workloads: []
+  # cert-manager and trust-manager (k8s/platform/cert-manager): cluster
+  # resource and trust namespace for the internal CA key pair and bundle sources.
+  - name: cert-manager
+    context: platform
+    kind: platform
+    injection: disabled
+    workloads: []
 
 # Documented exceptions. The validator fails on any weakening not listed here.
 exceptions:
@@ -192,6 +289,22 @@ exceptions:
         Not injected per platform contract addendum (2026-10-08). The ESO
         admission webhook is called by the kube-apiserver, which is not in the
         mesh; ESO only talks to the kube-apiserver and AWS Secrets Manager/STS.
+    - namespace: cert-manager
+      reason: >-
+        cert-manager and trust-manager webhooks are called by the
+        kube-apiserver (outside the mesh); they talk only to the kube-apiserver
+        (CA issuer, no ACME). Holds the internal CA key pair.
+  # Workloads in injected namespaces that run without a sidecar. They cannot
+  # present a principal, so no AuthorizationPolicy names them.
+  workloadInjection:
+    - workload: observability/prometheus-operator
+      reason: >-
+        The kube-apiserver (outside the mesh) calls the operator's admission
+        webhook on 10250; its admission Jobs would never finish with a sidecar.
+    - workload: observability/kube-state-metrics
+      reason: Only scraped by Prometheus (plain HTTP 8080, NetworkPolicy-scoped); talks only to the kube-apiserver.
+    - workload: observability/node-exporter
+      reason: hostNetwork DaemonSet; scraped on the node IP (9100).
   peerAuthentication: []          # no PERMISSIVE or DISABLE anywhere
   requestAuthentication:
     - namespace: open-finance
@@ -210,6 +323,8 @@ exceptions:
       reason: istiod webhooks are called from EKS control-plane ENIs; not yet drilled.
     - namespace: external-secrets
       reason: ESO webhook is called from EKS control-plane ENIs; not yet drilled.
+    - namespace: cert-manager
+      reason: cert-manager / trust-manager webhooks are called from EKS control-plane ENIs; not yet drilled.
 
 # Synchronous call edges (caller -> callee). Every edge renders an ALLOW
 # AuthorizationPolicy on the callee and matching NetworkPolicies.
@@ -341,15 +456,8 @@ edges:
     paths: [/realms/fintechbankx/protocol/openid-connect/token]
     evidence: platform contract - one confidential client per service, client-credentials
 
-  # Telemetry: OTLP to the collector (platform contract).
-  - from: "*/service-workloads"
-    to: observability/otel-collector
-    port: 4317
-    evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317
-  - from: "*/service-workloads"
-    to: observability/otel-collector
-    port: 4318
-    evidence: platform contract OTLP HTTP :4318
+  # Telemetry: OTLP to the collector is covered by the */mesh-workloads edge
+  # below (platform contract: otel-collector.observability.svc.cluster.local:4317/4318).
 
   # Scraping: Prometheus -> management port of every workload.
   - from: observability/prometheus
@@ -359,15 +467,167 @@ edges:
     paths: [/actuator/prometheus, /actuator/health, /actuator/health/*]
     evidence: Helm pod annotations prometheus.io/port=8081, path /actuator/prometheus
 
-  # Identity internals.
+  # Identity internals (identity repo deploy/kustomize, docs/identity).
   - from: identity/keycloak
     to: identity/openldap
     port: 389
-    evidence: platform contract - staff users federated from LDAP
+    evidence: >-
+      LDAP_CONNECTION_URL ldap://openldap.identity.svc.cluster.local:389 with
+      StartTLS (LDAP_TLS_ENFORCE); 636 is not exposed. dev/staging only; prod
+      federates the corporate directory (components/corporate-directory).
   - from: identity/keycloak
     to: identity/keycloak
-    port: 7800
-    evidence: Keycloak (Infinispan/JGroups) cluster traffic between replicas
+    ports: [7800, 57800]
+    evidence: >-
+      Keycloak 26 embedded Infinispan, JDBC_PING discovery, JGroups TCP 7800
+      and FD_SOCK2 failure detection on 7800+50000. Opaque TCP inside STRICT
+      mTLS; needs a headless Service declaring both ports (see docs).
+  - from: identity/keycloak-realm-import
+    to: identity/keycloak
+    port: 8080
+    paths: [/, /admin/*, /realms/*]
+    evidence: >-
+      keycloak-config-cli KEYCLOAK_URL http://keycloak.identity.svc.cluster.local:8080,
+      client_credentials token, availability check, admin REST.
+  - from: observability/prometheus
+    to: identity/keycloak
+    port: 9000
+    methods: [GET]
+    paths: [/metrics, /health, /health/*]
+    evidence: Keycloak CR httpManagement.port 9000; operator ServiceMonitor scrapes /metrics
+
+  # Telemetry from every meshed workload (application OTLP and Envoy tracing
+  # via meshConfig extensionProvider otel-tracing -> otel-collector:4317).
+  - from: "*/mesh-workloads"
+    to: observability/otel-collector
+    ports: [4317, 4318]
+    evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
+
+  # Observability pipeline (observability repo deploy/values).
+  - from: observability/otel-collector
+    to: observability/otel-gateway
+    port: 4317
+    evidence: agent loadbalancing exporter dns:///otel-gateway.observability.svc.cluster.local:4317
+  - from: observability/otel-gateway
+    to: observability/tempo-distributor
+    port: 4317
+    evidence: otlp exporter tempo-distributor.observability.svc.cluster.local:4317
+  - from: observability/otel-gateway
+    to: observability/loki-gateway
+    port: 8080
+    methods: [POST]
+    paths: [/otlp/*]
+    evidence: otlphttp exporter http://loki-gateway.observability.svc.cluster.local/otlp (Service 80 -> pod 8080)
+  - from: observability/otel-gateway
+    to: observability/prometheus
+    port: 9090
+    methods: [POST]
+    paths: [/api/v1/write]
+    evidence: prometheusremotewrite exporter .../api/v1/write (enableRemoteWriteReceiver)
+  - from: observability/tempo-metrics-generator
+    to: observability/prometheus
+    port: 9090
+    methods: [POST]
+    paths: [/api/v1/write]
+    evidence: tempo metricsGenerator remote_write .../api/v1/write (principal is the shared SA tempo)
+  - from: observability/grafana
+    to: observability/prometheus
+    port: 9090
+    evidence: Grafana datasource prometheus http://kube-prometheus-stack-prometheus...:9090
+  - from: observability/grafana
+    to: observability/loki-gateway
+    port: 8080
+    evidence: Grafana datasource loki http://loki-gateway.observability.svc.cluster.local
+  - from: observability/grafana
+    to: observability/tempo-query-frontend
+    port: 3100
+    evidence: Grafana datasource tempo http://tempo-query-frontend...:3100
+  - from: observability/grafana
+    to: observability/alertmanager
+    port: 9093
+    evidence: Grafana datasource alertmanager http://kube-prometheus-stack-alertmanager...:9093
+  - from: observability/grafana
+    to: identity/keycloak
+    port: 8080
+    paths:
+      - /realms/fintechbankx/protocol/openid-connect/token
+      - /realms/fintechbankx/protocol/openid-connect/userinfo
+      - /realms/fintechbankx/protocol/openid-connect/certs
+    evidence: >-
+      Grafana generic_oauth token and userinfo (confirmed by coordinator
+      2026-10-08). The observability values still point token_url/api_url at
+      https://<identity host>; they must use keycloak.identity.svc.cluster.local:8080
+      for this edge to be the path taken (backchannelDynamic keeps iss public).
+  - from: istio-ingress/istio-ingressgateway
+    to: observability/grafana
+    port: 3000
+    evidence: Grafana UI behind the ingress gateway (Keycloak SSO); route host not yet in params
+  - from: observability/prometheus
+    to: observability/alertmanager
+    port: 9093
+    evidence: Prometheus alertingEndpoints kube-prometheus-stack-alertmanager http-web
+  - from: observability/prometheus
+    to: observability/prometheus
+    port: 9090
+    methods: [GET]
+    paths: [/metrics]
+    evidence: PodMonitor prometheus (scrape class istio-mtls), self-scrape of the HA pair
+  - from: observability/prometheus
+    to: observability/otel-collector
+    port: 8888
+    methods: [GET]
+    paths: [/metrics]
+    evidence: PodMonitor opentelemetry-collector port metrics
+  - from: observability/prometheus
+    to: observability/otel-gateway
+    port: 8888
+    methods: [GET]
+    paths: [/metrics]
+    evidence: PodMonitor opentelemetry-collector port metrics
+  - from: observability/prometheus
+    to: observability/tempo
+    port: 3100
+    methods: [GET]
+    paths: [/metrics]
+    evidence: PodMonitor tempo port http-metrics
+  - from: observability/prometheus
+    to: observability/loki
+    ports: [3100, 8080, 9150]
+    methods: [GET]
+    paths: [/metrics]
+    evidence: PodMonitor loki port http-metrics (read/write/backend 3100, gateway 8080, memcached 9150)
+  - from: observability/prometheus
+    to: observability/grafana
+    port: 3000
+    methods: [GET]
+    paths: [/metrics]
+    evidence: PodMonitor grafana port grafana
+  - from: observability/prometheus
+    to: observability/yace
+    port: 5000
+    methods: [GET]
+    paths: [/metrics]
+    evidence: PodMonitor yace port http
+  - from: observability/prometheus
+    to: observability/kube-state-metrics
+    port: 8080
+    evidence: kube-prometheus-stack ServiceMonitor kube-state-metrics (no sidecar, NetworkPolicy only)
+
+  # Component-internal traffic (same service account): gRPC 9095, HTTP 3100,
+  # memberlist 7946 (TCP; its UDP part is not intercepted by Istio), memcached
+  # 11211; Alertmanager cluster 9094.
+  - from: observability/tempo
+    to: observability/tempo
+    ports: [3100, 4317, 4318, 7946, 9095, 11211]
+    evidence: tempo-distributed 1.18.2 Services (ingester/querier/query-frontend/metrics-generator grpc 9095, gossip-ring 7946, memcached 11211)
+  - from: observability/loki
+    to: observability/loki
+    ports: [3100, 7946, 9095, 11211]
+    evidence: loki 6.16.0 SimpleScalable Services (gateway -> read/write 3100, grpc 9095, memberlist 7946, caches 11211)
+  - from: observability/alertmanager
+    to: observability/alertmanager
+    port: 9094
+    evidence: Alertmanager HA cluster (TCP 9094; UDP gossip is not intercepted)
 
 # External (MESH_EXTERNAL) dependencies reachable under REGISTRY_ONLY.
 externalDependencies:
@@ -388,6 +648,27 @@ externalDependencies:
     ports: [9098, 9094]
     protocol: TLS
     cidrParam: MSK_CIDR
+  # Observability egress (observability repo values): S3 for Tempo and Loki
+  # (gateway endpoint, public prefix list -> NetworkPolicy 0.0.0.0/0:443,
+  # host-restricted by REGISTRY_ONLY), AMP remote write, CloudWatch for YACE.
+  aws-s3:
+    hosts: ["s3.me-central-1.amazonaws.com", "*.s3.me-central-1.amazonaws.com"]
+    port: 443
+    protocol: TLS
+    cidr: 0.0.0.0/0
+  aws-observability-apis:
+    hosts:
+      - aps-workspaces.me-central-1.amazonaws.com
+      - monitoring.me-central-1.amazonaws.com
+      - tagging.me-central-1.amazonaws.com
+    port: 443
+    protocol: TLS
+    cidrParam: VPC_CIDR
+  alert-receivers:
+    hosts: [hooks.slack.com, events.pagerduty.com]
+    port: 443
+    protocol: TLS
+    cidr: 0.0.0.0/0
   aws-apis:
     hosts:
       - sts.me-central-1.amazonaws.com

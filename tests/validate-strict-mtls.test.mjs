@@ -196,3 +196,45 @@ test('contract: open-finance keeps its documented token exception and is still d
     'cluster.local/ns/payments/sa/payment-initiation-settlement-service',
   ]);
 });
+
+test('R9: a workload without a sidecar needs a documented exception', () => {
+  const c = structuredClone(contract);
+  c.exceptions.workloadInjection = c.exceptions.workloadInjection.filter((x) => x.workload !== 'observability/kube-state-metrics');
+  const errors = checkZeroTrust(deployable(), c);
+  assert.ok(errors.some((e) => e.startsWith('R9 observability/kube-state-metrics')), errors.join('\n'));
+  assert.deepEqual(checkZeroTrust(deployable(), contract), []);
+});
+
+test('observability: chart selectors, shared service accounts and no principals for sidecar-less pods', () => {
+  const docs = deployable();
+  const ap = (ns, name) => docs.find((d) => d.doc.kind === 'AuthorizationPolicy' && d.doc.metadata.namespace === ns && d.doc.metadata.name === name)?.doc;
+  // otel pods are labelled by the chart, not by service account.
+  assert.deepEqual(ap('observability', 'allow-from-observability-otel-collector-to-otel-gateway').spec.selector.matchLabels, {
+    'app.kubernetes.io/name': 'opentelemetry-collector', 'app.kubernetes.io/instance': 'otel-gateway',
+  });
+  // Tempo metrics-generator writes to Prometheus with the shared tempo principal.
+  const mg = ap('observability', 'allow-from-observability-tempo-to-prometheus');
+  assert.deepEqual(mg.spec.rules[0].from[0].source.principals, ['cluster.local/ns/observability/sa/tempo']);
+  assert.deepEqual(mg.spec.rules[0].to[0].operation, { ports: ['9090'], methods: ['POST'], paths: ['/api/v1/write'] });
+  // Sidecar-less workloads: never a principal, never an AuthorizationPolicy target.
+  const text = JSON.stringify(docs.filter((d) => d.doc.kind === 'AuthorizationPolicy').map((d) => d.doc));
+  assert.ok(!text.includes('kube-state-metrics') && !text.includes('kube-prometheus-stack-operator'));
+  // Every meshed workload, the gateway included, may send OTLP / Envoy spans to the agent.
+  const callers = docs
+    .filter((d) => d.doc.kind === 'AuthorizationPolicy' && /-to-otel-collector$/.test(d.doc.metadata.name))
+    .flatMap((d) => d.doc.spec.rules.flatMap((r) => r.from[0].source.principals));
+  for (const p of ['istio-ingress/sa/istio-ingressgateway', 'identity/sa/keycloak', 'lending/sa/loan-lifecycle-service', 'open-finance/sa/atm-directory-service']) {
+    assert.ok(callers.includes(`cluster.local/ns/${p}`), p);
+  }
+});
+
+test('identity: realm import, JGroups ports and management scrape', () => {
+  const docs = deployable();
+  const ops = (name) =>
+    docs.find((d) => d.doc.kind === 'AuthorizationPolicy' && d.doc.metadata.namespace === 'identity' && d.doc.metadata.name === name)
+      .doc.spec.rules.map((r) => r.to[0].operation);
+  assert.deepEqual(ops('allow-from-identity-keycloak-to-keycloak').map((o) => o.ports[0]).sort(), ['57800', '7800']);
+  assert.deepEqual(ops('allow-from-identity-keycloak-realm-import-to-keycloak'), [{ ports: ['8080'], paths: ['/', '/admin/*', '/realms/*'] }]);
+  assert.deepEqual(ops('allow-from-observability-prometheus-to-keycloak'), [{ ports: ['9000'], methods: ['GET'], paths: ['/metrics', '/health', '/health/*'] }]);
+  assert.deepEqual(ops('allow-from-observability-grafana-to-keycloak')[0].ports, ['8080']);
+});

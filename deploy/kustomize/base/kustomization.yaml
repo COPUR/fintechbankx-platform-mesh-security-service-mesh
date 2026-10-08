@@ -21,3 +21,4 @@ resources:
   - generated/network-policies.yaml
   - ingress-tls-externalsecret.yaml
   - ../../../k8s/platform/external-secrets
+  - ../../../k8s/platform/cert-manager

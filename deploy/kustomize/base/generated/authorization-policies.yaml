@@ -373,7 +373,7 @@ metadata:
   name: allow-from-identity-keycloak-to-keycloak
   namespace: identity
   annotations:
-    fintechbankx.io/evidence: Keycloak (Infinispan/JGroups) cluster traffic between replicas
+    fintechbankx.io/evidence: Keycloak 26 embedded Infinispan, JDBC_PING discovery, JGroups TCP 7800 and FD_SOCK2 failure detection on 7800+50000. Opaque TCP inside STRICT mTLS; needs a headless Service declaring both ports (see docs).
 spec:
   selector:
     matchLabels:
@@ -388,6 +388,40 @@ spec:
         - operation:
             ports:
               - "7800"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/identity/sa/keycloak
+      to:
+        - operation:
+            ports:
+              - "57800"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-identity-keycloak-realm-import-to-keycloak
+  namespace: identity
+  annotations:
+    fintechbankx.io/evidence: keycloak-config-cli KEYCLOAK_URL http://keycloak.identity.svc.cluster.local:8080, client_credentials token, availability check, admin REST.
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/identity/sa/keycloak-realm-import
+      to:
+        - operation:
+            ports:
+              - "8080"
+            paths:
+              - /
+              - /admin/*
+              - /realms/*
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -452,6 +486,60 @@ spec:
               - POST
             paths:
               - /realms/fintechbankx/protocol/openid-connect/token
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-grafana-to-keycloak
+  namespace: identity
+  annotations:
+    fintechbankx.io/evidence: Grafana generic_oauth token and userinfo (confirmed by coordinator 2026-10-08). The observability values still point token_url/api_url at https://<identity host>; they must use keycloak.identity.svc.cluster.local:8080 for this edge to be the path taken (backchannelDynamic keeps iss public).
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/grafana
+      to:
+        - operation:
+            ports:
+              - "8080"
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/token
+              - /realms/fintechbankx/protocol/openid-connect/userinfo
+              - /realms/fintechbankx/protocol/openid-connect/certs
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-keycloak
+  namespace: identity
+  annotations:
+    fintechbankx.io/evidence: Keycloak CR httpManagement.port 9000; operator ServiceMonitor scrapes /metrics
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "9000"
+            methods:
+              - GET
+            paths:
+              - /metrics
+              - /health
+              - /health/*
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -927,7 +1015,7 @@ metadata:
   name: allow-from-identity-keycloak-to-openldap
   namespace: identity
   annotations:
-    fintechbankx.io/evidence: platform contract - staff users federated from LDAP
+    fintechbankx.io/evidence: LDAP_CONNECTION_URL ldap://openldap.identity.svc.cluster.local:389 with StartTLS (LDAP_TLS_ENFORCE); 636 is not exposed. dev/staging only; prod federates the corporate directory (components/corporate-directory).
 spec:
   selector:
     matchLabels:
@@ -999,14 +1087,271 @@ spec:
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
-  name: allow-from-compliance-compliance-evidence-service-to-otel-collector
+  name: allow-from-observability-grafana-to-alertmanager
   namespace: observability
   annotations:
-    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+    fintechbankx.io/evidence: Grafana datasource alertmanager http://kube-prometheus-stack-alertmanager...:9093
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/name: alertmanager
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/grafana
+      to:
+        - operation:
+            ports:
+              - "9093"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-kube-prometheus-stack-alertmanager-to-alertmanager
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: Alertmanager HA cluster (TCP 9094; UDP gossip is not intercepted)
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alertmanager
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/kube-prometheus-stack-alertmanager
+      to:
+        - operation:
+            ports:
+              - "9094"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-alertmanager
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: Prometheus alertingEndpoints kube-prometheus-stack-alertmanager http-web
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alertmanager
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "9093"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-istio-ingress-istio-ingressgateway-to-grafana
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: Grafana UI behind the ingress gateway (Keycloak SSO); route host not yet in params
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "3000"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-grafana
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: PodMonitor grafana port grafana
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "3000"
+            methods:
+              - GET
+            paths:
+              - /metrics
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-grafana-to-loki-gateway
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: Grafana datasource loki http://loki-gateway.observability.svc.cluster.local
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+      app.kubernetes.io/component: gateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/grafana
+      to:
+        - operation:
+            ports:
+              - "8080"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-otel-gateway-to-loki-gateway
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: otlphttp exporter http://loki-gateway.observability.svc.cluster.local/otlp (Service 80 -> pod 8080)
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+      app.kubernetes.io/component: gateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/otel-gateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /otlp/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-loki-to-loki
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: loki 6.16.0 SimpleScalable Services (gateway -> read/write 3100, grpc 9095, memberlist 7946, caches 11211)
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/loki
+      to:
+        - operation:
+            ports:
+              - "3100"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/loki
+      to:
+        - operation:
+            ports:
+              - "7946"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/loki
+      to:
+        - operation:
+            ports:
+              - "9095"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/loki
+      to:
+        - operation:
+            ports:
+              - "11211"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-loki
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: PodMonitor loki port http-metrics (read/write/backend 3100, gateway 8080, memcached 9150)
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "3100"
+            methods: &a1
+              - GET
+            paths: &a2
+              - /metrics
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods: *a1
+            paths: *a2
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "9150"
+            methods: *a1
+            paths: *a2
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-compliance-compliance-evidence-service-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
   action: ALLOW
   rules:
     - from:
@@ -1032,11 +1377,12 @@ metadata:
   name: allow-from-customer-customer-profile-kyc-service-to-otel-collector
   namespace: observability
   annotations:
-    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
   action: ALLOW
   rules:
     - from:
@@ -1051,6 +1397,130 @@ spec:
         - source:
             principals:
               - cluster.local/ns/customer/sa/customer-profile-kyc-service
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-identity-keycloak-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/identity/sa/keycloak
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/identity/sa/keycloak
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-identity-keycloak-realm-import-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/identity/sa/keycloak-realm-import
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/identity/sa/keycloak-realm-import
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-identity-openldap-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/identity/sa/openldap
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/identity/sa/openldap
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-istio-ingress-istio-ingressgateway-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
       to:
         - operation:
             ports:
@@ -1062,11 +1532,12 @@ metadata:
   name: allow-from-lending-loan-lifecycle-service-to-otel-collector
   namespace: observability
   annotations:
-    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
   action: ALLOW
   rules:
     - from:
@@ -1089,14 +1560,275 @@ spec:
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
-  name: allow-from-open-finance-atm-directory-service-to-otel-collector
+  name: allow-from-observability-grafana-to-otel-collector
   namespace: observability
   annotations:
-    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/grafana
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/grafana
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-kube-prometheus-stack-alertmanager-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/kube-prometheus-stack-alertmanager
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/kube-prometheus-stack-alertmanager
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-loki-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/loki
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/loki
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-otel-collector-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/otel-collector
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/otel-collector
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-otel-gateway-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/otel-gateway
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/otel-gateway
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing | PodMonitor opentelemetry-collector port metrics
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "4318"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "8888"
+            methods:
+              - GET
+            paths:
+              - /metrics
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-tempo-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/tempo
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/tempo
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-yace-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/yace
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/yace
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-open-finance-atm-directory-service-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
   action: ALLOW
   rules:
     - from:
@@ -1122,11 +1854,12 @@ metadata:
   name: allow-from-open-finance-banking-metadata-service-to-otel-collector
   namespace: observability
   annotations:
-    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
   action: ALLOW
   rules:
     - from:
@@ -1152,11 +1885,12 @@ metadata:
   name: allow-from-open-finance-business-financial-data-service-to-otel-collector
   namespace: observability
   annotations:
-    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
   action: ALLOW
   rules:
     - from:
@@ -1182,11 +1916,12 @@ metadata:
   name: allow-from-open-finance-consent-authorization-service-to-otel-collector
   namespace: observability
   annotations:
-    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
   action: ALLOW
   rules:
     - from:
@@ -1212,11 +1947,12 @@ metadata:
   name: allow-from-open-finance-open-products-catalog-service-to-otel-collector
   namespace: observability
   annotations:
-    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
   action: ALLOW
   rules:
     - from:
@@ -1242,11 +1978,12 @@ metadata:
   name: allow-from-open-finance-payee-verification-service-to-otel-collector
   namespace: observability
   annotations:
-    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
   action: ALLOW
   rules:
     - from:
@@ -1272,11 +2009,12 @@ metadata:
   name: allow-from-open-finance-personal-financial-data-service-to-otel-collector
   namespace: observability
   annotations:
-    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
   action: ALLOW
   rules:
     - from:
@@ -1302,11 +2040,12 @@ metadata:
   name: allow-from-payments-payment-bulk-orchestration-service-to-otel-collector
   namespace: observability
   annotations:
-    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
   action: ALLOW
   rules:
     - from:
@@ -1332,11 +2071,12 @@ metadata:
   name: allow-from-payments-payment-initiation-settlement-service-to-otel-collector
   namespace: observability
   annotations:
-    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
   action: ALLOW
   rules:
     - from:
@@ -1362,11 +2102,12 @@ metadata:
   name: allow-from-payments-payment-recurring-mandates-service-to-otel-collector
   namespace: observability
   annotations:
-    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
   action: ALLOW
   rules:
     - from:
@@ -1392,11 +2133,12 @@ metadata:
   name: allow-from-payments-payment-request-to-pay-service-to-otel-collector
   namespace: observability
   annotations:
-    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
   action: ALLOW
   rules:
     - from:
@@ -1422,11 +2164,12 @@ metadata:
   name: allow-from-risk-risk-decisioning-service-to-otel-collector
   namespace: observability
   annotations:
-    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
   action: ALLOW
   rules:
     - from:
@@ -1445,6 +2188,316 @@ spec:
         - operation:
             ports:
               - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-otel-collector-to-otel-gateway
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: agent loadbalancing exporter dns:///otel-gateway.observability.svc.cluster.local:4317
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-gateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/otel-collector
+      to:
+        - operation:
+            ports:
+              - "4317"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-otel-gateway
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: PodMonitor opentelemetry-collector port metrics
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-gateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "8888"
+            methods:
+              - GET
+            paths:
+              - /metrics
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-grafana-to-prometheus
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: Grafana datasource prometheus http://kube-prometheus-stack-prometheus...:9090
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/grafana
+      to:
+        - operation:
+            ports:
+              - "9090"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-otel-gateway-to-prometheus
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: prometheusremotewrite exporter .../api/v1/write (enableRemoteWriteReceiver)
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/otel-gateway
+      to:
+        - operation:
+            ports:
+              - "9090"
+            methods:
+              - POST
+            paths:
+              - /api/v1/write
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-prometheus
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: PodMonitor prometheus (scrape class istio-mtls), self-scrape of the HA pair
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "9090"
+            methods:
+              - GET
+            paths:
+              - /metrics
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-tempo-to-prometheus
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: tempo metricsGenerator remote_write .../api/v1/write (principal is the shared SA tempo)
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/tempo
+      to:
+        - operation:
+            ports:
+              - "9090"
+            methods:
+              - POST
+            paths:
+              - /api/v1/write
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-otel-gateway-to-tempo-distributor
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: otlp exporter tempo-distributor.observability.svc.cluster.local:4317
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tempo
+      app.kubernetes.io/component: distributor
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/otel-gateway
+      to:
+        - operation:
+            ports:
+              - "4317"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-grafana-to-tempo-query-frontend
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: Grafana datasource tempo http://tempo-query-frontend...:3100
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tempo
+      app.kubernetes.io/component: query-frontend
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/grafana
+      to:
+        - operation:
+            ports:
+              - "3100"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-tempo
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: PodMonitor tempo port http-metrics
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tempo
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "3100"
+            methods:
+              - GET
+            paths:
+              - /metrics
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-tempo-to-tempo
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: tempo-distributed 1.18.2 Services (ingester/querier/query-frontend/metrics-generator grpc 9095, gossip-ring 7946, memcached 11211)
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tempo
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/tempo
+      to:
+        - operation:
+            ports:
+              - "3100"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/tempo
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/tempo
+      to:
+        - operation:
+            ports:
+              - "4318"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/tempo
+      to:
+        - operation:
+            ports:
+              - "7946"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/tempo
+      to:
+        - operation:
+            ports:
+              - "9095"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/tempo
+      to:
+        - operation:
+            ports:
+              - "11211"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-yace
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: PodMonitor yace port http
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: yace
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "5000"
+            methods:
+              - GET
+            paths:
+              - /metrics
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy

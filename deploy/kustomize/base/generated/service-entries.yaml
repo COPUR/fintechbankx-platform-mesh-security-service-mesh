@@ -81,6 +81,61 @@ spec:
 apiVersion: networking.istio.io/v1
 kind: ServiceEntry
 metadata:
+  name: aws-s3
+  namespace: istio-system
+spec:
+  exportTo:
+    - "*"
+  location: MESH_EXTERNAL
+  hosts:
+    - s3.me-central-1.amazonaws.com
+    - "*.s3.me-central-1.amazonaws.com"
+  ports:
+    - number: 443
+      name: tls
+      protocol: TLS
+  resolution: NONE
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: aws-observability-apis
+  namespace: istio-system
+spec:
+  exportTo:
+    - "*"
+  location: MESH_EXTERNAL
+  hosts:
+    - aps-workspaces.me-central-1.amazonaws.com
+    - monitoring.me-central-1.amazonaws.com
+    - tagging.me-central-1.amazonaws.com
+  ports:
+    - number: 443
+      name: tls
+      protocol: TLS
+  resolution: DNS
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: alert-receivers
+  namespace: istio-system
+spec:
+  exportTo:
+    - "*"
+  location: MESH_EXTERNAL
+  hosts:
+    - hooks.slack.com
+    - events.pagerduty.com
+  ports:
+    - number: 443
+      name: tls
+      protocol: TLS
+  resolution: DNS
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
   name: aws-apis
   namespace: istio-system
 spec:
