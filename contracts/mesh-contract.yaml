@@ -327,6 +327,13 @@ namespaces:
         sourceRepo: fintechbankx-platform-observability-sre-operations
         selector: {app.kubernetes.io/name: loki, app.kubernetes.io/component: gateway}
         destinationRule: false
+      # Loki ruler (SimpleScalable backend pods) sends alerts to Alertmanager.
+      - serviceAccount: loki
+        name: loki-backend
+        serviceId: platform-observability-loki
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: loki, app.kubernetes.io/component: backend}
+        destinationRule: false
       - serviceAccount: yace
         serviceId: platform-observability-yace
         sourceRepo: fintechbankx-platform-observability-sre-operations
@@ -818,6 +825,18 @@ edges:
     to: observability/alertmanager
     port: 9093
     evidence: Prometheus alertingEndpoints kube-prometheus-stack-alertmanager http-web
+  # Loki ruler -> Alertmanager (observability eca7aa0: alert
+  # KeycloakServiceAccountAdminEventOutOfScope). The principal is the SA loki,
+  # shared by every Loki component (AuthorizationPolicy cannot narrow it
+  # further); the edge NetworkPolicies select the backend pods only, on top of
+  # the namespace's allow-same-namespace rule. Loki 3.x notifier: Alertmanager
+  # API v2 only.
+  - from: observability/loki-backend
+    to: observability/alertmanager
+    port: 9093
+    methods: [POST]
+    paths: [/api/v2/alerts]
+    evidence: observability deploy/values/loki.yaml ruler.alertmanager_url http://kube-prometheus-stack-alertmanager.observability.svc.cluster.local:9093 (loki 6.16.0, Loki 3.1.1, backend pods)
   - from: observability/prometheus
     to: observability/prometheus
     port: 9090

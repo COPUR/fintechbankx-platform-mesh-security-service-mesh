@@ -1202,6 +1202,32 @@ spec:
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
+  name: allow-from-observability-loki-to-alertmanager
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: observability deploy/values/loki.yaml ruler.alertmanager_url http://kube-prometheus-stack-alertmanager.observability.svc.cluster.local:9093 (loki 6.16.0, Loki 3.1.1, backend pods)
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alertmanager
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/loki
+      to:
+        - operation:
+            ports:
+              - "9093"
+            methods:
+              - POST
+            paths:
+              - /api/v2/alerts
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
   name: allow-from-observability-prometheus-to-alertmanager
   namespace: observability
   annotations:
