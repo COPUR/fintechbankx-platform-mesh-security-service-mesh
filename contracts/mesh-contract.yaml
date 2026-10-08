@@ -1,0 +1,321 @@
+# FinTechBankX mesh contract (Proposed).
+#
+# Single source of truth for the mesh policies in deploy/kustomize/base.
+# scripts/generate/render-mesh-policies.mjs renders the base manifests from
+# this file and tests/ fail when the committed manifests drift from it.
+#
+# Aligned to the platform contract (platform pillar, 2026-10-08): one namespace
+# per bounded context, SA = Helm chart name, http 8080 / management 8081,
+# SPIFFE principal cluster.local/ns/<ns>/sa/<sa>, Keycloak realm fintechbankx.
+#
+# Call edges were read from the service repos (branch
+# claude/project-thread-ty79y4) - application.yml, Helm values and HTTP
+# adapters - not from target-state diagrams. Edges whose callee does not exist
+# yet are listed under `gaps` and are NOT allowed by any policy.
+
+istio:
+  version: 1.24.3
+  trustDomain: cluster.local
+
+ports:
+  http: 8080
+  management: 8081
+
+identity:
+  realm: fintechbankx
+  # Each workload's RequestAuthentication requires aud to contain its own
+  # service id (platform contract addendum); the gateway checks issuer only.
+  # Per-environment identity host comes from the overlay params (IDENTITY_HOST).
+  issuer: https://IDENTITY_HOST/realms/fintechbankx
+  jwksUri: https://IDENTITY_HOST/realms/fintechbankx/protocol/openid-connect/certs
+
+gateway:
+  namespace: istio-ingress
+  serviceAccount: istio-ingressgateway
+  selector:
+    istio: ingressgateway
+  # Container ports of the gateway Deployment (Helm chart istio/gateway 1.24.3).
+  containerPorts: [80, 443]
+
+# kind: service   -> bounded-context namespace with application workloads
+# kind: platform  -> platform namespace managed by a platform repo
+namespaces:
+  - name: lending
+    context: lending
+    kind: service
+    workloads:
+      - serviceAccount: loan-lifecycle-service
+        serviceId: svc-ln-loan-lifecycle
+        sourceRepo: fintechbankx-lendingpayments-loan-lifecycle-core
+        apiPrefix: /api/v1/loans
+        datastores: [aurora-postgresql, msk]
+  - name: payments
+    context: payments
+    kind: service
+    workloads:
+      - serviceAccount: payment-initiation-settlement-service
+        serviceId: svc-pay-initiation-settlement
+        sourceRepo: fintechbankx-lendingpayments-payment-orchestration-initiation-settlement
+        apiPrefix: /api/v1/payments
+        datastores: [aurora-postgresql, msk]
+    # svc-pay-recurring-mandates, svc-pay-bulk-orchestration and
+    # svc-pay-request-to-pay have no deployable chart or service account yet.
+  - name: customer
+    context: customer
+    kind: service
+    workloads:
+      - serviceAccount: customer-profile-kyc-service
+        serviceId: svc-cus-profile-kyc
+        sourceRepo: fintechbankx-customer-profile-kyc-core
+        apiPrefix: /api/v1/customers
+        datastores: [aurora-postgresql, msk]
+  - name: risk
+    context: risk
+    kind: service
+    workloads:
+      - serviceAccount: risk-decisioning-service
+        serviceId: svc-rsk-decisioning
+        sourceRepo: fintechbankx-riskcompliance-risk-decisioning-core
+        apiPrefix: /api/v1/risk
+        datastores: [aurora-postgresql]
+  - name: compliance
+    context: compliance
+    kind: service
+    workloads:
+      - serviceAccount: compliance-evidence-service
+        serviceId: svc-cmp-evidence
+        sourceRepo: fintechbankx-riskcompliance-compliance-evidence-core
+        apiPrefix: /api/v1/compliance
+        datastores: [aurora-postgresql]
+  - name: open-finance
+    context: open-finance
+    kind: service
+    # The openfinance-* charts are placeholders (image openfinance/microservice
+    # with tag latest, no service account, no management port), so no allow
+    # rule can name a workload yet. The namespace stays default-deny.
+    workloads: []
+  - name: identity
+    context: identity
+    kind: platform
+    workloads:
+      - serviceAccount: keycloak
+        serviceId: platform-identity-keycloak
+        sourceRepo: fintechbankx-platform-identity-iam-keycloak-ldap
+        datastores: [aurora-postgresql]
+      - serviceAccount: openldap
+        serviceId: platform-identity-openldap
+        sourceRepo: fintechbankx-platform-identity-iam-keycloak-ldap
+  - name: observability
+    context: observability
+    kind: platform
+    workloads:
+      - serviceAccount: otel-collector
+        serviceId: platform-observability-otel-collector
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+      - serviceAccount: prometheus
+        serviceId: platform-observability-prometheus
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+  - name: istio-ingress
+    context: platform
+    kind: platform
+    # Gateway pods use the istio/gateway chart's `gateway` injection template;
+    # the addendum's injected list names only workload namespaces, and does
+    # not list istio-ingress as non-injected.
+    workloads:
+      - serviceAccount: istio-ingressgateway
+        serviceId: platform-mesh-ingress-gateway
+        sourceRepo: fintechbankx-platform-mesh-security-service-mesh
+  - name: istio-system
+    context: platform
+    kind: platform
+    injection: none
+    workloads: []
+  - name: external-secrets
+    context: platform
+    kind: platform
+    injection: disabled
+    workloads: []
+
+# Documented exceptions. The validator fails on any weakening not listed here.
+exceptions:
+  injection:
+    - namespace: istio-system
+      reason: Istio control plane; never injected.
+    - namespace: external-secrets
+      reason: >-
+        Not injected per platform contract addendum (2026-10-08). The ESO
+        admission webhook is called by the kube-apiserver, which is not in the
+        mesh; ESO only talks to the kube-apiserver and AWS Secrets Manager/STS.
+  peerAuthentication: []          # no PERMISSIVE or DISABLE anywhere
+  requestAuthentication:
+    - namespace: open-finance
+      reason: >-
+        openfinance-* services issue and verify their own HMAC/DPoP tokens
+        (OPENFINANCE_*_JWT_SECRET, dpop-required) instead of Keycloak; a
+        Keycloak-only RequestAuthentication would reject them. Namespace is
+        default-deny until the services move to the Keycloak issuer.
+  networkPolicyDefaultDeny:
+    - namespace: istio-system
+      reason: istiod webhooks are called from EKS control-plane ENIs; not yet drilled.
+    - namespace: external-secrets
+      reason: ESO webhook is called from EKS control-plane ENIs; not yet drilled.
+
+# Synchronous call edges (caller -> callee). Every edge renders an ALLOW
+# AuthorizationPolicy on the callee and matching NetworkPolicies.
+edges:
+  # North-south: ingress gateway -> service APIs (JWT required, see requireJwt).
+  - from: istio-ingress/istio-ingressgateway
+    to: lending/loan-lifecycle-service
+    port: 8080
+    paths: [/api/v1/loans, /api/v1/loans/*]
+    evidence: loan-infrastructure LoanController @RequestMapping("/api/v1/loans")
+  - from: istio-ingress/istio-ingressgateway
+    to: payments/payment-initiation-settlement-service
+    port: 8080
+    paths: [/api/v1/payments, /api/v1/payments/*]
+    evidence: payment-infrastructure controller @RequestMapping("/api/v1/payments")
+  - from: istio-ingress/istio-ingressgateway
+    to: customer/customer-profile-kyc-service
+    port: 8080
+    paths: [/api/v1/customers, /api/v1/customers/*]
+    evidence: customer-infrastructure CustomerController @RequestMapping("/api/v1/customers")
+  - from: istio-ingress/istio-ingressgateway
+    to: risk/risk-decisioning-service
+    port: 8080
+    paths: [/api/v1/risk, /api/v1/risk/*]
+    evidence: risk controller @RequestMapping("/api/v1/risk")
+  - from: istio-ingress/istio-ingressgateway
+    to: compliance/compliance-evidence-service
+    port: 8080
+    paths: [/api/v1/compliance, /api/v1/compliance/*]
+    evidence: compliance controller @RequestMapping("/api/v1/compliance")
+  - from: istio-ingress/istio-ingressgateway
+    to: identity/keycloak
+    port: 8080
+    paths: [/realms/fintechbankx/*, /resources/*]
+    evidence: platform contract (realm fintechbankx); admin console and master realm stay unreachable
+
+  # East-west: loan -> customer credit (CustomerProfileHttpAdapter, caller JWT propagated).
+  # Since a33b418 the loan service calls with its own client-credentials token
+  # (client id svc-ln-loan-lifecycle); Keycloak must put svc-cus-profile-kyc in aud.
+  - from: lending/loan-lifecycle-service
+    to: customer/customer-profile-kyc-service
+    port: 8080
+    methods: [GET]
+    paths: [/api/v1/customers/*]
+    evidence: CUSTOMER_SERVICE_BASE_URL=http://customer-profile-kyc-service.customer.svc.cluster.local:8080; GET /api/v1/customers/{customerId}
+  - from: lending/loan-lifecycle-service
+    to: customer/customer-profile-kyc-service
+    port: 8080
+    methods: [POST]
+    paths: ["/api/v1/customers/{*}/credit/reserve", "/api/v1/customers/{*}/credit/release"]
+    evidence: CustomerProfileHttpAdapter POST /api/v1/customers/{customerId}/credit/{reserve|release}
+
+  # payments -> risk / compliance: confirmed by the service threads
+  # (coordinator, 2026-10-08). No HTTP adapter exists on the payment branch yet,
+  # so methods and paths are unknown and the rule is port-scoped only.
+  - from: payments/payment-initiation-settlement-service
+    to: risk/risk-decisioning-service
+    port: 8080
+    scope: port-only
+    evidence: confirmed by service thread 2026-10-08; adapter not yet on claude/project-thread-ty79y4
+  - from: payments/payment-initiation-settlement-service
+    to: compliance/compliance-evidence-service
+    port: 8080
+    scope: port-only
+    evidence: confirmed by service thread 2026-10-08; adapter not yet on claude/project-thread-ty79y4
+
+  # Every Spring resource server fetches the realm JWKS (OIDC_JWK_SET_URI);
+  # client-credentials token exchange per platform contract.
+  - from: "*/service-workloads"
+    to: identity/keycloak
+    port: 8080
+    methods: [GET]
+    paths: [/realms/fintechbankx/protocol/openid-connect/certs, /realms/fintechbankx/.well-known/openid-configuration]
+    evidence: spring.security.oauth2.resourceserver.jwt.jwk-set-uri in every service application.yml
+  - from: "*/service-workloads"
+    to: identity/keycloak
+    port: 8080
+    methods: [POST]
+    paths: [/realms/fintechbankx/protocol/openid-connect/token]
+    evidence: platform contract - one confidential client per service, client-credentials
+
+  # Telemetry: OTLP to the collector (platform contract).
+  - from: "*/service-workloads"
+    to: observability/otel-collector
+    port: 4317
+    evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317
+  - from: "*/service-workloads"
+    to: observability/otel-collector
+    port: 4318
+    evidence: platform contract OTLP HTTP :4318
+
+  # Scraping: Prometheus -> management port of every workload.
+  - from: observability/prometheus
+    to: "*/service-workloads"
+    port: 8081
+    methods: [GET]
+    paths: [/actuator/prometheus, /actuator/health, /actuator/health/*]
+    evidence: Helm pod annotations prometheus.io/port=8081, path /actuator/prometheus
+
+  # Identity internals.
+  - from: identity/keycloak
+    to: identity/openldap
+    port: 389
+    evidence: platform contract - staff users federated from LDAP
+  - from: identity/keycloak
+    to: identity/keycloak
+    port: 7800
+    evidence: Keycloak (Infinispan/JGroups) cluster traffic between replicas
+
+# External (MESH_EXTERNAL) dependencies reachable under REGISTRY_ONLY.
+externalDependencies:
+  aurora-postgresql:
+    port: 5432
+    protocol: TCP
+    cidrParam: AURORA_CIDR
+  msk:
+    hosts: ["*.kafka.me-central-1.amazonaws.com"]
+    ports: [9098, 9094]
+    protocol: TLS
+    cidrParam: MSK_CIDR
+  aws-apis:
+    hosts:
+      - sts.me-central-1.amazonaws.com
+      - secretsmanager.me-central-1.amazonaws.com
+      - kms.me-central-1.amazonaws.com
+    port: 443
+    protocol: TLS
+    cidrParam: VPC_CIDR
+  identity-external:
+    hosts: [IDENTITY_HOST]
+    port: 443
+    protocol: TLS
+
+# Call edges found in service configuration whose callee does not exist yet.
+gaps:
+  - from: payments/payment-initiation-settlement-service
+    to: core-banking accounts API
+    evidence: >-
+      payment-bootstrap application.yml payment.accounts.base-url
+      ${ACCOUNTS_SERVICE_BASE_URL:http://core-banking-accounts:8080};
+      CoreBankingAccountHttpAdapter GET /api/v1/accounts/{accountId}; Helm
+      values ACCOUNTS_SERVICE_BASE_URL is empty. No core-banking repo,
+      namespace or service account exists, so no policy allows it; with
+      ACCOUNTS_ADAPTER=http the service fails closed.
+  - from: open-finance/*
+    to: MongoDB and Redis
+    evidence: >-
+      openfinance-* application.yml use OPENFINANCE_*_MONGODB_URI and
+      OPENFINANCE_*_REDIS_URL; no DocumentDB/ElastiCache endpoint or CIDR is
+      defined in the platform contract, so no ServiceEntry or egress rule exists.
+  - from: payments/payment-initiation-settlement-service
+    to: risk/risk-decisioning-service, compliance/compliance-evidence-service (paths)
+    evidence: >-
+      Edge confirmed by the service threads but no adapter exists yet; the
+      ALLOW rule is port-only (8080) until methods and paths are known.
+  - from: risk/risk-decisioning-service, compliance/compliance-evidence-service
+    to: Kafka
+    evidence: >-
+      Neither service configures Kafka (no spring.kafka, no @KafkaListener);
+      they publish and consume no events yet, so they get no MSK egress.

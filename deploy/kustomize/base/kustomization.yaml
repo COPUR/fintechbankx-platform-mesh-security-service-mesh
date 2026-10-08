@@ -1,0 +1,23 @@
+# Mesh security base (Proposed). Built only through an overlay: the overlay
+# supplies mesh-params and the mesh-params component substitutes them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: fintechbankx-platform-mesh
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: false
+
+resources:
+  - generated/namespaces.yaml
+  - generated/peer-authentication.yaml
+  - generated/request-authentication.yaml
+  - generated/authorization-policies.yaml
+  - generated/destination-rules.yaml
+  - generated/service-entries.yaml
+  - generated/sidecars.yaml
+  - generated/ingress-routing.yaml
+  - generated/network-policies.yaml
+  - ingress-tls-externalsecret.yaml
+  - ../../../k8s/platform/external-secrets
