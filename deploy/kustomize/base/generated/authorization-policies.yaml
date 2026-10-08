@@ -297,6 +297,32 @@ spec:
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
+  name: allow-from-payments-payment-initiation-settlement-service-to-customer-profile-kyc-service
+  namespace: customer
+  annotations:
+    fintechbankx.io/evidence: customer thread 2026-10-08, GET /api/v1/customers/{id}/kyc-status for payments
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: customer-profile-kyc-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-initiation-settlement-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /api/v1/customers/{*}/kyc-status
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
   name: allow-from-compliance-compliance-evidence-service-to-keycloak
   namespace: identity
   annotations:

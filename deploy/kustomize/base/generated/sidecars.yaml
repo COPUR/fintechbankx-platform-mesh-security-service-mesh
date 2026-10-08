@@ -40,6 +40,7 @@ spec:
     - hosts:
         - ./*
         - compliance/*
+        - customer/*
         - identity/*
         - istio-system/*
         - observability/*

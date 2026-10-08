@@ -389,7 +389,8 @@ edges:
     paths: [/api/v1/customers, /api/v1/customers/*]
     # Service-only credit operations stay off the public gateway (review
     # finding, customer thread 2026-10-08): only loan-lifecycle calls them.
-    # GET /credit stays public (CUSTOMER self-read, BANKER, ADMIN; customer thread 2026-10-08).
+    # GET /credit and GET /kyc-status stay public (CUSTOMER self-read, BANKER, ADMIN;
+    # customer thread 2026-10-08).
     notPaths: ["/api/v1/customers/{*}/credit/reserve", "/api/v1/customers/{*}/credit/release"]
     evidence: customer-infrastructure CustomerController @RequestMapping("/api/v1/customers")
   - from: istio-ingress/istio-ingressgateway
@@ -425,6 +426,17 @@ edges:
     methods: [POST]
     paths: ["/api/v1/customers/{*}/credit/reserve", "/api/v1/customers/{*}/credit/release"]
     evidence: CustomerProfileHttpAdapter POST /api/v1/customers/{customerId}/credit/{reserve|release}
+
+  # East-west: payments -> customer KYC status (kycVerified fix, customer thread
+  # 2026-10-08). SERVICE caller: aud svc-cus-profile-kyc, azp
+  # svc-pay-initiation-settlement (customer's SERVICE_CALLERS_KYC). No PII in the
+  # response. Staff and the customer read it through the gateway like GET /credit.
+  - from: payments/payment-initiation-settlement-service
+    to: customer/customer-profile-kyc-service
+    port: 8080
+    methods: [GET]
+    paths: ["/api/v1/customers/{*}/kyc-status"]
+    evidence: customer thread 2026-10-08, GET /api/v1/customers/{id}/kyc-status for payments
 
   # payments -> risk / compliance: confirmed by the service threads
   # (coordinator, 2026-10-08). No HTTP adapter exists on the payment branch yet,

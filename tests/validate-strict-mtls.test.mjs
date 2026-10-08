@@ -131,7 +131,14 @@ test('contract: recorded gaps are not allowed by any policy', () => {
   const paymentEgress = docs.filter(
     (d) => d.doc.kind === 'NetworkPolicy' && d.doc.metadata.namespace === 'payments' && /allow-egress-to-/.test(d.doc.metadata.name),
   );
-  assert.deepEqual(paymentEgress.map((d) => d.doc.metadata.name).sort(), ['allow-egress-to-compliance', 'allow-egress-to-identity', 'allow-egress-to-observability', 'allow-egress-to-open-finance', 'allow-egress-to-risk']);
+  assert.deepEqual(paymentEgress.map((d) => d.doc.metadata.name).sort(), ['allow-egress-to-compliance', 'allow-egress-to-customer', 'allow-egress-to-identity', 'allow-egress-to-observability', 'allow-egress-to-open-finance', 'allow-egress-to-risk']);
+});
+
+test('contract: payments reads only the customer KYC status, with GET', () => {
+  const edges = expandEdges(contract).filter(
+    (e) => e.from.sa === 'payment-initiation-settlement-service' && e.to.sa === 'customer-profile-kyc-service',
+  );
+  assert.deepEqual(edges.map((e) => [e.methods, e.paths]), [[['GET'], ['/api/v1/customers/{*}/kyc-status']]]);
 });
 
 test('contract: east-west service edges are exactly the confirmed ones and scoped', () => {
@@ -141,6 +148,7 @@ test('contract: east-west service edges are exactly the confirmed ones and scope
     'lending/loan-lifecycle-service->customer/customer-profile-kyc-service',
     'payments/payment-bulk-orchestration-service->open-finance/consent-authorization-service',
     'payments/payment-initiation-settlement-service->compliance/compliance-evidence-service',
+    'payments/payment-initiation-settlement-service->customer/customer-profile-kyc-service',
     'payments/payment-initiation-settlement-service->open-finance/consent-authorization-service',
     'payments/payment-initiation-settlement-service->open-finance/payee-verification-service',
     'payments/payment-initiation-settlement-service->risk/risk-decisioning-service',
