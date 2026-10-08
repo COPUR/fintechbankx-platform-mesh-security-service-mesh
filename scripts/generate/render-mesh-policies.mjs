@@ -730,11 +730,14 @@ function networkPolicies(contract) {
         inbound.get(k).peers.set(`${e.from.ns}/${e.from.name}`, e.from);
         inbound.get(k).ports.add(e.port);
       }
+      // Egress per calling workload and target namespace, one rule per
+      // callee with that edge's ports: a pod reaches only what it calls.
       if (e.from.ns === ns && e.to.ns !== ns) {
-        const k = `${e.to.ns}`;
-        if (!outbound.has(k)) outbound.set(k, { peers: new Map(), ports: new Set() });
-        outbound.get(k).peers.set(`${e.to.ns}/${e.to.name}`, e.to);
-        outbound.get(k).ports.add(e.port);
+        const k = `${e.from.name}|${e.to.ns}`;
+        if (!outbound.has(k)) outbound.set(k, { from: e.from, toNs: e.to.ns, callees: new Map() });
+        const callees = outbound.get(k).callees;
+        if (!callees.has(e.to.name)) callees.set(e.to.name, { peer: e.to, ports: new Set() });
+        callees.get(e.to.name).ports.add(e.port);
       }
       if (e.from.ns === ns && e.to.ns === ns) {
         inbound.set(`self:${e.from.name}:${e.to.name}:${e.port}`, { self: true, e });
@@ -772,17 +775,15 @@ function networkPolicies(contract) {
         }),
       );
     }
-    for (const [k, v] of [...outbound.entries()].sort()) {
+    for (const [, v] of [...outbound.entries()].sort(([a], [b]) => a.localeCompare(b))) {
       docs.push(
-        np(ns, `allow-egress-to-${k}`, {
-          podSelector: {},
+        np(ns, `allow-egress-${v.from.name}-to-${v.toNs}`, {
+          podSelector: { matchLabels: peerSelector(contract, v.from).podSelector.matchLabels },
           policyTypes: ['Egress'],
-          egress: [
-            {
-              to: [...v.peers.values()].map((p) => peerSelector(contract, p)),
-              ports: tcp([...v.ports].sort((a, b) => a - b)),
-            },
-          ],
+          egress: [...v.callees.keys()].sort().map((name) => {
+            const c = v.callees.get(name);
+            return { to: [peerSelector(contract, c.peer)], ports: tcp([...c.ports].sort((a, b) => a - b)) };
+          }),
         }),
       );
     }

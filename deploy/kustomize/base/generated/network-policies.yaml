@@ -208,10 +208,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-customer
+  name: allow-egress-loan-lifecycle-service-to-customer
   namespace: lending
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loan-lifecycle-service
   policyTypes:
     - Egress
   egress:
@@ -229,10 +231,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-identity
+  name: allow-egress-loan-lifecycle-service-to-identity
   namespace: lending
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loan-lifecycle-service
   policyTypes:
     - Egress
   egress:
@@ -250,10 +254,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-observability
+  name: allow-egress-loan-lifecycle-service-to-observability
   namespace: lending
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loan-lifecycle-service
   policyTypes:
     - Egress
   egress:
@@ -484,52 +490,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-compliance
+  name: allow-egress-payment-bulk-orchestration-service-to-identity
   namespace: payments
 spec:
-  podSelector: {}
-  policyTypes:
-    - Egress
-  egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: compliance
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: compliance-evidence-service
-      ports:
-        - protocol: TCP
-          port: 8080
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-egress-to-customer
-  namespace: payments
-spec:
-  podSelector: {}
-  policyTypes:
-    - Egress
-  egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: customer
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: customer-profile-kyc-service
-      ports:
-        - protocol: TCP
-          port: 8080
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-egress-to-identity
-  namespace: payments
-spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payment-bulk-orchestration-service
   policyTypes:
     - Egress
   egress:
@@ -547,10 +513,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-observability
+  name: allow-egress-payment-bulk-orchestration-service-to-observability
   namespace: payments
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payment-bulk-orchestration-service
   policyTypes:
     - Egress
   egress:
@@ -571,20 +539,16 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-open-finance
+  name: allow-egress-payment-bulk-orchestration-service-to-open-finance
   namespace: payments
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payment-bulk-orchestration-service
   policyTypes:
     - Egress
   egress:
     - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: open-finance
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: payee-verification-service
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: open-finance
@@ -598,10 +562,130 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-risk
+  name: allow-egress-payment-initiation-settlement-service-to-compliance
   namespace: payments
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payment-initiation-settlement-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: compliance
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: compliance-evidence-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-payment-initiation-settlement-service-to-customer
+  namespace: payments
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payment-initiation-settlement-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: customer
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: customer-profile-kyc-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-payment-initiation-settlement-service-to-identity
+  namespace: payments
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payment-initiation-settlement-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-payment-initiation-settlement-service-to-observability
+  namespace: payments
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payment-initiation-settlement-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+              app.kubernetes.io/instance: otel-collector
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-payment-initiation-settlement-service-to-open-finance
+  namespace: payments
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payment-initiation-settlement-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: open-finance
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: payee-verification-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-payment-initiation-settlement-service-to-risk
+  namespace: payments
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payment-initiation-settlement-service
   policyTypes:
     - Egress
   egress:
@@ -615,6 +699,127 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-payment-recurring-mandates-service-to-identity
+  namespace: payments
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payment-recurring-mandates-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-payment-recurring-mandates-service-to-observability
+  namespace: payments
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payment-recurring-mandates-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+              app.kubernetes.io/instance: otel-collector
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-payment-recurring-mandates-service-to-open-finance
+  namespace: payments
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payment-recurring-mandates-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: open-finance
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: consent-authorization-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-payment-request-to-pay-service-to-identity
+  namespace: payments
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payment-request-to-pay-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-payment-request-to-pay-service-to-observability
+  namespace: payments
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payment-request-to-pay-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+              app.kubernetes.io/instance: otel-collector
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -865,10 +1070,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-identity
+  name: allow-egress-customer-profile-kyc-service-to-identity
   namespace: customer
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: customer-profile-kyc-service
   policyTypes:
     - Egress
   egress:
@@ -886,10 +1093,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-observability
+  name: allow-egress-customer-profile-kyc-service-to-observability
   namespace: customer
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: customer-profile-kyc-service
   policyTypes:
     - Egress
   egress:
@@ -1135,10 +1344,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-identity
+  name: allow-egress-risk-decisioning-service-to-identity
   namespace: risk
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: risk-decisioning-service
   policyTypes:
     - Egress
   egress:
@@ -1156,10 +1367,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-observability
+  name: allow-egress-risk-decisioning-service-to-observability
   namespace: risk
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: risk-decisioning-service
   policyTypes:
     - Egress
   egress:
@@ -1405,10 +1618,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-identity
+  name: allow-egress-compliance-evidence-service-to-identity
   namespace: compliance
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: compliance-evidence-service
   policyTypes:
     - Egress
   egress:
@@ -1426,10 +1641,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-observability
+  name: allow-egress-compliance-evidence-service-to-observability
   namespace: compliance
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: compliance-evidence-service
   policyTypes:
     - Egress
   egress:
@@ -1742,10 +1959,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-identity
+  name: allow-egress-atm-directory-service-to-identity
   namespace: open-finance
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: atm-directory-service
   policyTypes:
     - Egress
   egress:
@@ -1763,10 +1982,306 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-observability
+  name: allow-egress-atm-directory-service-to-observability
   namespace: open-finance
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: atm-directory-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+              app.kubernetes.io/instance: otel-collector
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-banking-metadata-service-to-identity
+  namespace: open-finance
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: banking-metadata-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-banking-metadata-service-to-observability
+  namespace: open-finance
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: banking-metadata-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+              app.kubernetes.io/instance: otel-collector
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-business-financial-data-service-to-identity
+  namespace: open-finance
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: business-financial-data-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-business-financial-data-service-to-observability
+  namespace: open-finance
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: business-financial-data-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+              app.kubernetes.io/instance: otel-collector
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-consent-authorization-service-to-identity
+  namespace: open-finance
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: consent-authorization-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-consent-authorization-service-to-observability
+  namespace: open-finance
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: consent-authorization-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+              app.kubernetes.io/instance: otel-collector
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-open-products-catalog-service-to-identity
+  namespace: open-finance
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: open-products-catalog-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-open-products-catalog-service-to-observability
+  namespace: open-finance
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: open-products-catalog-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+              app.kubernetes.io/instance: otel-collector
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-payee-verification-service-to-identity
+  namespace: open-finance
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payee-verification-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-payee-verification-service-to-observability
+  namespace: open-finance
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payee-verification-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+              app.kubernetes.io/instance: otel-collector
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-personal-financial-data-service-to-identity
+  namespace: open-finance
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: personal-financial-data-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-personal-financial-data-service-to-observability
+  namespace: open-finance
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: personal-financial-data-service
   policyTypes:
     - Egress
   egress:
@@ -2315,10 +2830,64 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-observability
+  name: allow-egress-keycloak-realm-import-to-observability
   namespace: identity
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak-realm-import
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+              app.kubernetes.io/instance: otel-collector
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-keycloak-to-observability
+  namespace: identity
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+              app.kubernetes.io/instance: otel-collector
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-openldap-to-observability
+  namespace: identity
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: openldap
   policyTypes:
     - Egress
   egress:
@@ -4700,10 +5269,35 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-compliance
+  name: allow-egress-grafana-to-identity
   namespace: observability
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-prometheus-to-compliance
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
   policyTypes:
     - Egress
   egress:
@@ -4721,10 +5315,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-customer
+  name: allow-egress-prometheus-to-customer
   namespace: observability
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
   policyTypes:
     - Egress
   egress:
@@ -4742,10 +5338,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-identity
+  name: allow-egress-prometheus-to-identity
   namespace: observability
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
   policyTypes:
     - Egress
   egress:
@@ -4758,17 +5356,17 @@ spec:
               app.kubernetes.io/name: keycloak
       ports:
         - protocol: TCP
-          port: 8080
-        - protocol: TCP
           port: 9000
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-lending
+  name: allow-egress-prometheus-to-lending
   namespace: observability
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
   policyTypes:
     - Egress
   egress:
@@ -4786,10 +5384,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-open-finance
+  name: allow-egress-prometheus-to-open-finance
   namespace: observability
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
   policyTypes:
     - Egress
   egress:
@@ -4799,37 +5399,41 @@ spec:
               kubernetes.io/metadata.name: open-finance
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: consent-authorization-service
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: open-finance
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: payee-verification-service
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: open-finance
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: personal-financial-data-service
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: open-finance
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: business-financial-data-service
+              app.kubernetes.io/name: atm-directory-service
+      ports:
+        - protocol: TCP
+          port: 8081
+    - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: open-finance
           podSelector:
             matchLabels:
               app.kubernetes.io/name: banking-metadata-service
+      ports:
+        - protocol: TCP
+          port: 8081
+    - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: open-finance
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: atm-directory-service
+              app.kubernetes.io/name: business-financial-data-service
+      ports:
+        - protocol: TCP
+          port: 8081
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: open-finance
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: consent-authorization-service
+      ports:
+        - protocol: TCP
+          port: 8081
+    - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: open-finance
@@ -4839,14 +5443,36 @@ spec:
       ports:
         - protocol: TCP
           port: 8081
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: open-finance
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: payee-verification-service
+      ports:
+        - protocol: TCP
+          port: 8081
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: open-finance
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: personal-financial-data-service
+      ports:
+        - protocol: TCP
+          port: 8081
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-payments
+  name: allow-egress-prometheus-to-payments
   namespace: observability
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
   policyTypes:
     - Egress
   egress:
@@ -4856,25 +5482,37 @@ spec:
               kubernetes.io/metadata.name: payments
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: payment-initiation-settlement-service
+              app.kubernetes.io/name: payment-bulk-orchestration-service
+      ports:
+        - protocol: TCP
+          port: 8081
+    - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: payments
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: payment-request-to-pay-service
+              app.kubernetes.io/name: payment-initiation-settlement-service
+      ports:
+        - protocol: TCP
+          port: 8081
+    - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: payments
           podSelector:
             matchLabels:
               app.kubernetes.io/name: payment-recurring-mandates-service
+      ports:
+        - protocol: TCP
+          port: 8081
+    - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: payments
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: payment-bulk-orchestration-service
+              app.kubernetes.io/name: payment-request-to-pay-service
       ports:
         - protocol: TCP
           port: 8081
@@ -4882,10 +5520,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-risk
+  name: allow-egress-prometheus-to-risk
   namespace: observability
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
   policyTypes:
     - Egress
   egress:
@@ -5125,10 +5765,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-compliance
+  name: allow-egress-istio-ingressgateway-to-compliance
   namespace: istio-ingress
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      istio: ingressgateway
   policyTypes:
     - Egress
   egress:
@@ -5146,10 +5788,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-customer
+  name: allow-egress-istio-ingressgateway-to-customer
   namespace: istio-ingress
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      istio: ingressgateway
   policyTypes:
     - Egress
   egress:
@@ -5167,10 +5811,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-identity
+  name: allow-egress-istio-ingressgateway-to-identity
   namespace: istio-ingress
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      istio: ingressgateway
   policyTypes:
     - Egress
   egress:
@@ -5188,10 +5834,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-lending
+  name: allow-egress-istio-ingressgateway-to-lending
   namespace: istio-ingress
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      istio: ingressgateway
   policyTypes:
     - Egress
   egress:
@@ -5209,21 +5857,16 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-observability
+  name: allow-egress-istio-ingressgateway-to-observability
   namespace: istio-ingress
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      istio: ingressgateway
   policyTypes:
     - Egress
   egress:
     - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: observability
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: opentelemetry-collector
-              app.kubernetes.io/instance: otel-collector
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: observability
@@ -5233,6 +5876,15 @@ spec:
       ports:
         - protocol: TCP
           port: 3000
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+              app.kubernetes.io/instance: otel-collector
+      ports:
         - protocol: TCP
           port: 4317
         - protocol: TCP
@@ -5241,10 +5893,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-open-finance
+  name: allow-egress-istio-ingressgateway-to-open-finance
   namespace: istio-ingress
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      istio: ingressgateway
   policyTypes:
     - Egress
   egress:
@@ -5254,37 +5908,41 @@ spec:
               kubernetes.io/metadata.name: open-finance
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: consent-authorization-service
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: open-finance
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: payee-verification-service
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: open-finance
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: personal-financial-data-service
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: open-finance
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: business-financial-data-service
+              app.kubernetes.io/name: atm-directory-service
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: open-finance
           podSelector:
             matchLabels:
               app.kubernetes.io/name: banking-metadata-service
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: open-finance
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: atm-directory-service
+              app.kubernetes.io/name: business-financial-data-service
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: open-finance
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: consent-authorization-service
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: open-finance
@@ -5294,14 +5952,36 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: open-finance
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: payee-verification-service
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: open-finance
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: personal-financial-data-service
+      ports:
+        - protocol: TCP
+          port: 8080
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-payments
+  name: allow-egress-istio-ingressgateway-to-payments
   namespace: istio-ingress
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      istio: ingressgateway
   policyTypes:
     - Egress
   egress:
@@ -5311,25 +5991,37 @@ spec:
               kubernetes.io/metadata.name: payments
           podSelector:
             matchLabels:
+              app.kubernetes.io/name: payment-bulk-orchestration-service
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: payments
+          podSelector:
+            matchLabels:
               app.kubernetes.io/name: payment-initiation-settlement-service
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: payments
           podSelector:
             matchLabels:
               app.kubernetes.io/name: payment-recurring-mandates-service
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: payments
           podSelector:
             matchLabels:
               app.kubernetes.io/name: payment-request-to-pay-service
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: payments
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: payment-bulk-orchestration-service
       ports:
         - protocol: TCP
           port: 8080
@@ -5337,10 +6029,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-risk
+  name: allow-egress-istio-ingressgateway-to-risk
   namespace: istio-ingress
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      istio: ingressgateway
   policyTypes:
     - Egress
   egress:

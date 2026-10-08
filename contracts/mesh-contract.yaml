@@ -571,6 +571,11 @@ edges:
 
   # payments -> open finance consent and payee verification: confirmed by the
   # service threads (2026-10-08); no adapter on the payment branch yet.
+  # Egress NetworkPolicies are rendered per calling workload and target
+  # namespace (one rule per callee and its ports), so only bulk orchestration
+  # and recurring mandates reach consent-auth, and only initiation-settlement
+  # reaches payee verification, risk, compliance and customer; the other
+  # payment pods get no egress into those namespaces.
   # payment-initiation-settlement-service has no consent edge: it does not call
   # consent-auth (open finance and lending threads, 2026-10-08), and a
   # port-only rule would reach /internal/v1 and /oauth2/token (review of mesh

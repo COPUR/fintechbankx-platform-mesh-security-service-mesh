@@ -130,9 +130,10 @@ test('contract: recorded gaps are not allowed by any policy', () => {
   assert.ok(contract.gaps.some((g) => g.to.startsWith('core-banking')));
   assert.ok(!text.includes('core-banking'), 'no manifest may route or allow traffic to core-banking yet');
   const paymentEgress = docs.filter(
-    (d) => d.doc.kind === 'NetworkPolicy' && d.doc.metadata.namespace === 'payments' && /allow-egress-to-/.test(d.doc.metadata.name),
+    (d) => d.doc.kind === 'NetworkPolicy' && d.doc.metadata.namespace === 'payments' && /^allow-egress-.+-to-/.test(d.doc.metadata.name),
   );
-  assert.deepEqual(paymentEgress.map((d) => d.doc.metadata.name).sort(), ['allow-egress-to-compliance', 'allow-egress-to-customer', 'allow-egress-to-identity', 'allow-egress-to-observability', 'allow-egress-to-open-finance', 'allow-egress-to-risk']);
+  const targets = new Set(paymentEgress.map((d) => d.doc.metadata.name.replace(/^.*-to-/, '')));
+  assert.deepEqual([...targets].sort(), ['compliance', 'customer', 'identity', 'observability', 'open-finance', 'risk']);
 });
 
 test('contract: payments reads only the customer KYC status, with GET', () => {
@@ -606,4 +607,46 @@ test('R12 rejects customer/account identifiers in metric tags, span tags and acc
     { tracing: [{ customTags: { cell: { environment: { name: 'CELL_ID' } } } }] },
   ];
   for (const spec of ok) assert.deepEqual(checkTelemetryTags(telemetry(spec)), [], JSON.stringify(spec));
+});
+
+test('contract: cross-namespace egress is per calling workload, not per namespace pair', () => {
+  const docs = deployable();
+  const nps = docs.filter((d) => d.doc.kind === 'NetworkPolicy').map((d) => d.doc);
+  const np = (ns, name) => nps.find((d) => d.metadata.namespace === ns && d.metadata.name === name);
+  const nsNames = new Set(contract.namespaces.map((n) => n.name));
+  // No namespace-wide egress to another contract namespace.
+  for (const d of nps) {
+    const m = /^allow-egress-(?:.+-)?to-(.+)$/.exec(d.metadata.name);
+    if (!m || !nsNames.has(m[1]) || m[1] === d.metadata.namespace) continue;
+    assert.ok(Object.keys(d.spec.podSelector).length > 0, `${d.metadata.namespace}/${d.metadata.name} selects every pod`);
+  }
+  for (const ns of ['payments', 'lending', 'open-finance', 'istio-ingress']) {
+    for (const t of contract.namespaces.map((n) => n.name)) assert.equal(np(ns, `allow-egress-to-${t}`), undefined, `${ns} -> ${t}`);
+  }
+  const callees = (d) => d.spec.egress.map((r) => [r.to.map((t) => t.podSelector.matchLabels['app.kubernetes.io/name']).join(','), r.ports.map((p) => p.port).join(',')]);
+  const sel = (name) => ({ 'app.kubernetes.io/name': name });
+
+  const bulk = np('payments', 'allow-egress-payment-bulk-orchestration-service-to-open-finance');
+  assert.deepEqual(bulk.spec.podSelector, { matchLabels: sel('payment-bulk-orchestration-service') });
+  assert.deepEqual(callees(bulk), [['consent-authorization-service', '8080']]);
+  const mandates = np('payments', 'allow-egress-payment-recurring-mandates-service-to-open-finance');
+  assert.deepEqual(callees(mandates), [['consent-authorization-service', '8080']]);
+  const initiation = (t) => np('payments', `allow-egress-payment-initiation-settlement-service-to-${t}`);
+  assert.deepEqual(callees(initiation('open-finance')), [['payee-verification-service', '8080']]);
+  assert.deepEqual(callees(initiation('risk')), [['risk-decisioning-service', '8080']]);
+  assert.deepEqual(callees(initiation('compliance')), [['compliance-evidence-service', '8080']]);
+  assert.deepEqual(callees(initiation('customer')), [['customer-profile-kyc-service', '8080']]);
+  // request-to-pay has no east-west edge, so no egress into another service namespace.
+  for (const t of ['open-finance', 'customer', 'risk', 'compliance']) {
+    assert.equal(np('payments', `allow-egress-payment-request-to-pay-service-to-${t}`), undefined, t);
+  }
+  const loan = np('lending', 'allow-egress-loan-lifecycle-service-to-customer');
+  assert.deepEqual(loan.spec.podSelector, { matchLabels: sel('loan-lifecycle-service') });
+  assert.deepEqual(callees(loan), [['customer-profile-kyc-service', '8080']]);
+  // The callee side still admits only the calling workloads.
+  const ingress = np('open-finance', 'allow-ingress-from-payments');
+  assert.deepEqual(
+    ingress.spec.ingress[0].from.map((f) => f.podSelector.matchLabels['app.kubernetes.io/name']).sort(),
+    ['payment-bulk-orchestration-service', 'payment-initiation-settlement-service', 'payment-recurring-mandates-service'],
+  );
 });
