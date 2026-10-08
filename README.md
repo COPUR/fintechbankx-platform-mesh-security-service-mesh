@@ -107,7 +107,7 @@ A service chart must (platform contract addendum, 2026-10-08):
   `dataFrom.find`, no `sourceRef`). The ValidatingAdmissionPolicy
   `fintechbankx-externalsecret-scope` (generated, Kubernetes 1.30+) rejects
   anything else in a service namespace; platform keys (`<env>/platform/*`,
-  `<env>/identity-keycloak/*`) are only reachable through
+  `<env>/identity-keycloak/*`, `<env>/identity-openldap/*`) are only reachable through
   `aws-secrets-manager-platform` from the platform namespaces;
 - validate JWT issuer `https://<identity-host>/realms/fintechbankx` and an
   `aud` containing its own service id.
