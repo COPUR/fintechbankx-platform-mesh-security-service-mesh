@@ -132,6 +132,25 @@ export function withSubpathExclusions(notPaths) {
   return out;
 }
 
+// Edge `when` conditions are rendered as the rule's Istio `when` list. A
+// request.auth.* key is evaluated by the callee's sidecar, which only has
+// request.auth when a RequestAuthentication selects that workload; without one
+// the condition never matches and the edge silently denies everything.
+function checkWhen(contract, e) {
+  for (const c of e.when) {
+    if (typeof c.key !== 'string' || !Array.isArray(c.values) || c.values.length === 0) {
+      throw new Error(`edge ${e.from.ns}/${e.from.name} -> ${e.to.ns}/${e.to.name}: when entries need a key and non-empty values`);
+    }
+    if (!c.key.startsWith('request.auth.')) continue;
+    const isService = serviceWorkloads(contract).some((w) => w.ns === e.to.ns && (w.name || w.serviceAccount) === e.to.name);
+    if (!isService || isException(contract, 'requestAuthentication', e.to.ns)) {
+      throw new Error(
+        `edge ${e.from.ns}/${e.from.name} -> ${e.to.ns}/${e.to.name}: ${c.key} (request.auth) needs a RequestAuthentication on the callee, and ${e.to.ns}/${e.to.name} has none`,
+      );
+    }
+  }
+}
+
 function authorizationPolicies(contract) {
   const docs = [];
   const gw = contract.gateway;
@@ -174,7 +193,8 @@ function authorizationPolicies(contract) {
     if (e.methods) op.methods = e.methods;
     if (e.paths) op.paths = e.paths;
     if (e.notPaths) op.notPaths = withSubpathExclusions(e.notPaths);
-    g.ops.push(op);
+    if (e.when) checkWhen(contract, e);
+    g.ops.push({ op, when: e.when });
     if (e.evidence) g.evidence.push(e.evidence);
   }
   for (const g of [...grouped.values()].sort((a, b) =>
@@ -191,9 +211,10 @@ function authorizationPolicies(contract) {
       spec: {
         selector: { matchLabels: g.to.selector },
         action: 'ALLOW',
-        rules: g.ops.map((op) => ({
+        rules: g.ops.map(({ op, when }) => ({
           from: [{ source: { principals: [principal(contract, g.from.ns, g.from.sa)] } }],
           to: [{ operation: op }],
+          ...(when ? { when: structuredClone(when) } : {}), // no YAML anchors in the output
         })),
       },
     });

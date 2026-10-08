@@ -387,16 +387,33 @@ edges:
     port: 8080
     paths: [/api/v1/payments, /api/v1/payments/*]
     evidence: payment-infrastructure controller @RequestMapping("/api/v1/payments")
+  # Gateway -> customer: first-party clients only (identity review
+  # 2026-10-08): customers sign in through fintechbankx-web or
+  # fintechbankx-mobile, staff through fintechbankx-staff-web. request.auth is
+  # set by the customer workload's RequestAuthentication (aud
+  # svc-cus-profile-kyc); the gateway forwards the token it validated.
+  # Service-only credit operations stay off the public gateway (review
+  # finding, customer thread 2026-10-08): only loan-lifecycle calls
+  # POST credit/reserve|release. GET /credit and GET /kyc-status stay public
+  # (CUSTOMER self-read, BANKER, ADMIN; customer thread 2026-10-08), so
+  # /credit and everything below it is excluded here and GET /credit is
+  # allowed by the next edge alone.
   - from: istio-ingress/istio-ingressgateway
     to: customer/customer-profile-kyc-service
     port: 8080
     paths: [/api/v1/customers, /api/v1/customers/*]
-    # Service-only credit operations stay off the public gateway (review
-    # finding, customer thread 2026-10-08): only loan-lifecycle calls them.
-    # GET /credit and GET /kyc-status stay public (CUSTOMER self-read, BANKER, ADMIN;
-    # customer thread 2026-10-08).
-    notPaths: ["/api/v1/customers/{*}/credit/reserve", "/api/v1/customers/{*}/credit/release"]
+    notPaths: ["/api/v1/customers/{*}/credit"]
+    when: &first-party-azp
+      - key: request.auth.claims[azp]
+        values: [fintechbankx-web, fintechbankx-mobile, fintechbankx-staff-web]
     evidence: customer-infrastructure CustomerController @RequestMapping("/api/v1/customers")
+  - from: istio-ingress/istio-ingressgateway
+    to: customer/customer-profile-kyc-service
+    port: 8080
+    methods: [GET]
+    paths: ["/api/v1/customers/{*}/credit"]
+    when: *first-party-azp
+    evidence: customer thread 2026-10-08, GET /api/v1/customers/{id}/credit (CUSTOMER self-read, BANKER, ADMIN)
   - from: istio-ingress/istio-ingressgateway
     to: risk/risk-decisioning-service
     port: 8080

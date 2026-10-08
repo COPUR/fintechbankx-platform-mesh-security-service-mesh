@@ -206,7 +206,7 @@ metadata:
   name: allow-from-istio-ingress-istio-ingressgateway-to-customer-profile-kyc-service
   namespace: customer
   annotations:
-    fintechbankx.io/evidence: customer-infrastructure CustomerController @RequestMapping("/api/v1/customers")
+    fintechbankx.io/evidence: customer-infrastructure CustomerController @RequestMapping("/api/v1/customers") | customer thread 2026-10-08, GET /api/v1/customers/{id}/credit (CUSTOMER self-read, BANKER, ADMIN)
 spec:
   selector:
     matchLabels:
@@ -225,12 +225,33 @@ spec:
               - /api/v1/customers
               - /api/v1/customers/*
             notPaths:
-              - /api/v1/customers/{*}/credit/reserve
-              - /api/v1/customers/{*}/credit/reserve/
-              - /api/v1/customers/{*}/credit/reserve/{**}
-              - /api/v1/customers/{*}/credit/release
-              - /api/v1/customers/{*}/credit/release/
-              - /api/v1/customers/{*}/credit/release/{**}
+              - /api/v1/customers/{*}/credit
+              - /api/v1/customers/{*}/credit/
+              - /api/v1/customers/{*}/credit/{**}
+      when:
+        - key: request.auth.claims[azp]
+          values:
+            - fintechbankx-web
+            - fintechbankx-mobile
+            - fintechbankx-staff-web
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /api/v1/customers/{*}/credit
+      when:
+        - key: request.auth.claims[azp]
+          values:
+            - fintechbankx-web
+            - fintechbankx-mobile
+            - fintechbankx-staff-web
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
