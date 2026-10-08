@@ -10,7 +10,7 @@ import {
   checkGenerated,
   parseDocs,
 } from '../scripts/validation/validate-strict-mtls.mjs';
-import { loadContract, expandEdges, knownServiceAccounts } from '../scripts/lib/contract.mjs';
+import { loadContract, expandEdges, knownServiceAccounts, secretScopes } from '../scripts/lib/contract.mjs';
 
 const contract = loadContract();
 const all = loadRepoDocs();
@@ -345,4 +345,159 @@ test('consent: the in-cluster GET /api/v1/consents/{id} view is open to bulk and
     'cluster.local/ns/payments/sa/payment-bulk-orchestration-service',
     'cluster.local/ns/payments/sa/payment-recurring-mandates-service',
   ]);
+});
+
+// ------------------------------------------------------------------ secrets (R10)
+// These tests check the manifests' structure (store conditions, which store
+// each ExternalSecret uses, the admission policy's match and expressions) and
+// the validator's static ExternalSecret check. They do NOT execute the CEL of
+// the ValidatingAdmissionPolicy; that needs a kube-apiserver.
+const SVC_STORE = 'aws-secrets-manager';
+const PF_STORE = 'aws-secrets-manager-platform';
+const store = (docs, name) => docs.find((d) => d.doc.kind === 'ClusterSecretStore' && d.doc.metadata.name === name);
+const externalSecret = (ns, { store: s = SVC_STORE, label, keys = [], dataFrom } = {}) => ({
+  file: 'inline.yaml',
+  index: 0,
+  doc: {
+    apiVersion: 'external-secrets.io/v1beta1',
+    kind: 'ExternalSecret',
+    metadata: { name: 'probe', namespace: ns, ...(label ? { labels: { 'app.kubernetes.io/name': label } } : {}) },
+    spec: {
+      secretStoreRef: { kind: 'ClusterSecretStore', name: s },
+      data: keys.map((key, i) => ({ secretKey: `k${i}`, remoteRef: { key, property: 'password' } })),
+      ...(dataFrom ? { dataFrom } : {}),
+    },
+  },
+});
+const r10 = (docs) => checkZeroTrust(docs, contract).filter((e) => e.startsWith('R10'));
+
+test('R10 the service store is limited by conditions to service namespaces', () => {
+  const docs = deployable();
+  assert.deepEqual(store(docs, SVC_STORE).doc.spec.conditions, [
+    { namespaceSelector: { matchLabels: { 'fintechbankx.io/namespace-kind': 'service' } } },
+    { namespaces: ['observability'] },
+  ]);
+  delete store(docs, SVC_STORE).doc.spec.conditions;
+  assert.ok(hasRule(r10(docs), 'R10', `${SVC_STORE} has no spec.conditions`), r10(docs).join('\n'));
+
+  const widened = deployable();
+  store(widened, SVC_STORE).doc.spec.conditions.push({ namespaces: ['cert-manager'] });
+  assert.ok(hasRule(r10(widened), 'R10', 'cert-manager'), r10(widened).join('\n'));
+
+  const open = deployable();
+  store(open, SVC_STORE).doc.spec.conditions.push({ namespaceSelector: {} });
+  assert.ok(hasRule(r10(open), 'R10', 'condition'), r10(open).join('\n'));
+});
+
+test('R10 the platform store is limited to cert-manager, istio-ingress and identity, with its own service account', () => {
+  const docs = deployable();
+  const pf = store(docs, PF_STORE).doc;
+  assert.deepEqual(pf.spec.conditions, [{ namespaces: ['cert-manager', 'istio-ingress', 'identity'] }]);
+  assert.equal(pf.spec.provider.aws.auth.jwt.serviceAccountRef.name, 'external-secrets-platform');
+  assert.equal(store(docs, SVC_STORE).doc.spec.provider.aws.auth.jwt.serviceAccountRef.name, 'external-secrets');
+
+  const widened = deployable();
+  store(widened, PF_STORE).doc.spec.conditions[0].namespaces.push('payments');
+  assert.ok(hasRule(r10(widened), 'R10', 'payments'), r10(widened).join('\n'));
+
+  const selector = deployable();
+  store(selector, PF_STORE).doc.spec.conditions.push({ namespaceSelector: { matchLabels: { 'fintechbankx.io/namespace-kind': 'platform' } } });
+  assert.ok(hasRule(r10(selector), 'R10', 'namespaceSelector'), r10(selector).join('\n'));
+
+  const shared = deployable();
+  store(shared, PF_STORE).doc.spec.provider.aws.auth.jwt.serviceAccountRef.name = 'external-secrets';
+  assert.ok(hasRule(r10(shared), 'R10', 'own service account'), r10(shared).join('\n'));
+});
+
+test('R10 platform ExternalSecrets in this repo use the platform store', () => {
+  const docs = deployable();
+  const es = docs.filter((d) => d.doc.kind === 'ExternalSecret').map((d) => d.doc);
+  assert.deepEqual(es.map((d) => `${d.metadata.namespace}/${d.metadata.name}`).sort(), [
+    'cert-manager/corporate-directory-ca-source',
+    'cert-manager/fintechbankx-internal-ca-keypair',
+    'istio-ingress/fintechbankx-ingress-tls',
+  ]);
+  for (const d of es) assert.equal(d.spec.secretStoreRef.name, PF_STORE, d.metadata.name);
+  find(docs, 'ExternalSecret', 'cert-manager', 'fintechbankx-internal-ca-keypair').doc.spec.secretStoreRef.name = SVC_STORE;
+  assert.ok(hasRule(r10(docs), 'R10', 'fintechbankx-internal-ca-keypair'), r10(docs).join('\n'));
+});
+
+test('R10 rejects a service-namespace ExternalSecret on the platform store or outside its slug', () => {
+  const ok = externalSecret('payments', {
+    label: 'payment-bulk-orchestration-service',
+    keys: ['ENVIRONMENT/payment-bulk-orchestration-service/db-app', 'ENVIRONMENT/payment-bulk-orchestration-service/oidc-client'],
+  });
+  assert.deepEqual(r10([...deployable(), ok]), []);
+
+  const onPlatformStore = structuredClone(ok);
+  onPlatformStore.doc.spec.secretStoreRef.name = PF_STORE;
+  assert.ok(hasRule(r10([...deployable(), onPlatformStore]), 'R10', PF_STORE));
+
+  const platformKey = externalSecret('payments', { label: 'payment-bulk-orchestration-service', keys: ['ENVIRONMENT/platform/internal-ca'] });
+  assert.ok(hasRule(r10([...deployable(), platformKey]), 'R10', 'ENVIRONMENT/platform/internal-ca'));
+
+  // Same namespace, another service's slug: payments hosts four services.
+  const neighbour = externalSecret('payments', { label: 'payment-bulk-orchestration-service', keys: ['ENVIRONMENT/payment-initiation-settlement-service/db-app'] });
+  assert.ok(hasRule(r10([...deployable(), neighbour]), 'R10', 'payment-initiation-settlement-service/db-app'));
+
+  const foreignLabel = externalSecret('payments', { label: 'loan-lifecycle-service', keys: ['ENVIRONMENT/loan-lifecycle-service/db-app'] });
+  assert.ok(hasRule(r10([...deployable(), foreignLabel]), 'R10', 'app.kubernetes.io/name'));
+
+  const unlabelled = externalSecret('payments', { keys: ['ENVIRONMENT/payment-bulk-orchestration-service/db-app'] });
+  assert.ok(hasRule(r10([...deployable(), unlabelled]), 'R10', 'app.kubernetes.io/name'));
+
+  const find_ = externalSecret('lending', { label: 'loan-lifecycle-service', dataFrom: [{ find: { name: { regexp: '.*' } } }] });
+  assert.ok(hasRule(r10([...deployable(), find_]), 'R10', 'find'));
+
+  const extract = externalSecret('lending', { label: 'loan-lifecycle-service', dataFrom: [{ extract: { key: 'ENVIRONMENT/identity-keycloak/bootstrap-admin-client' } }] });
+  assert.ok(hasRule(r10([...deployable(), extract]), 'R10', 'identity-keycloak'));
+});
+
+test('externalsecret admission policy: match, bindings and expressions', () => {
+  const docs = deployable();
+  const vap = docs.find((d) => d.doc.kind === 'ValidatingAdmissionPolicy' && d.doc.metadata.name === 'fintechbankx-externalsecret-scope').doc;
+  const binding = docs.find((d) => d.doc.kind === 'ValidatingAdmissionPolicyBinding').doc;
+  assert.equal(vap.apiVersion, 'admissionregistration.k8s.io/v1');
+  assert.equal(vap.spec.failurePolicy, 'Fail');
+  assert.deepEqual(vap.spec.matchConstraints.resourceRules, [
+    { apiGroups: ['external-secrets.io'], apiVersions: ['*'], operations: ['CREATE', 'UPDATE'], resources: ['externalsecrets'] },
+  ]);
+  assert.deepEqual(vap.spec.matchConstraints.namespaceSelector.matchExpressions, [
+    { key: 'fintechbankx.io/namespace-kind', operator: 'Exists' },
+    { key: 'kubernetes.io/metadata.name', operator: 'NotIn', values: ['cert-manager', 'istio-ingress', 'identity'] },
+  ]);
+  assert.equal(binding.apiVersion, 'admissionregistration.k8s.io/v1');
+  assert.equal(binding.spec.policyName, vap.metadata.name);
+  assert.deepEqual(binding.spec.validationActions, ['Deny']);
+  const v = Object.fromEntries(vap.spec.variables.map((x) => [x.name, x.expression]));
+  assert.equal(v.env, "'ENVIRONMENT'", 'the overlay substitutes the environment');
+  // The slug map is the contract's: payments holds four services.
+  const scopes = secretScopes(contract);
+  assert.deepEqual(scopes.payments, [
+    'payment-bulk-orchestration-service', 'payment-initiation-settlement-service',
+    'payment-recurring-mandates-service', 'payment-request-to-pay-service',
+  ]);
+  for (const [ns, slugs] of Object.entries(scopes)) {
+    assert.ok(v.scopes.includes(`'${ns}': [${slugs.map((x) => `'${x}'`).join(', ')}]`), ns);
+    for (const p of contract.secrets.platformKeyPrefixes) assert.ok(!slugs.includes(p), `${ns} may not read ${p}/`);
+  }
+  assert.match(v.slug, /object\.metadata\.labels\['app\.kubernetes\.io\/name'\]/);
+  assert.match(v.serviceNamespace, /namespaceObject\.metadata\.labels\['fintechbankx\.io\/namespace-kind'\] == 'service'/);
+  assert.match(v.keys, /remoteRef\.key/);
+  assert.match(v.keys, /extract\.key/);
+  const exprs = vap.spec.validations.map((x) => x.expression).join('\n');
+  assert.match(exprs, /secretStoreRef\.name == 'aws-secrets-manager'/);
+  assert.match(exprs, /!has\(f\.find\)/);
+  assert.match(exprs, /!has\(d\.sourceRef\)/);
+  assert.match(exprs, /!has\(f\.sourceRef\)/);
+  assert.match(exprs, /variables\.keys\.all\(k, variables\.prefixes\.exists\(p, k\.startsWith\(p\)\)\)/);
+  for (const x of vap.spec.validations) assert.ok(x.message || x.messageExpression, x.expression);
+});
+
+test('R10 fails when the admission policy or its Deny binding is missing', () => {
+  const noPolicy = deployable().filter((d) => d.doc.kind !== 'ValidatingAdmissionPolicy');
+  assert.ok(hasRule(r10(noPolicy), 'R10', 'ValidatingAdmissionPolicy'));
+  const audit = deployable();
+  audit.find((d) => d.doc.kind === 'ValidatingAdmissionPolicyBinding').doc.spec.validationActions = ['Audit'];
+  assert.ok(hasRule(r10(audit), 'R10', 'Deny'));
 });

@@ -131,3 +131,20 @@ export function expandEdges(contract) {
 export function isException(contract, kind, ns) {
   return (contract.exceptions?.[kind] || []).some((x) => x.namespace === ns);
 }
+
+/**
+ * Namespaces governed by the ExternalSecret admission policy and the key
+ * slugs each may read (<env>/<slug>/...). Service namespaces: their workloads'
+ * service accounts (= service slug). Shared platform namespaces: the slugs
+ * listed under secrets.sharedStoreNamespaces.
+ */
+export function secretScopes(contract) {
+  const out = {};
+  for (const n of serviceNamespaces(contract)) {
+    out[n.name] = [...new Set((n.workloads || []).map((w) => w.serviceAccount))].sort();
+  }
+  for (const [ns, slugs] of Object.entries(contract.secrets?.sharedStoreNamespaces || {})) {
+    out[ns] = [...slugs].sort();
+  }
+  return out;
+}

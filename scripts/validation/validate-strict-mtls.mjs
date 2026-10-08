@@ -21,6 +21,15 @@
 //  R8 generated manifests match the contract rendering.
 //  R9 every workload declared without a sidecar is listed in
 //     exceptions.workloadInjection.
+//  R10 secret scoping (contract `secrets`): the service ClusterSecretStore has
+//     conditions selecting only service namespaces and the shared namespaces;
+//     the platform store names only the platform-store namespaces and uses its
+//     own ESO service account; ExternalSecrets in platform-store namespaces use
+//     the platform store; any other ExternalSecret uses the service store and
+//     reads only <env>/<slug>/ keys (service namespaces: slug = its
+//     app.kubernetes.io/name label, one of the namespace's service accounts);
+//     the ValidatingAdmissionPolicy enforcing this at admission exists with a
+//     Deny binding. Static checks only: the CEL itself runs in the apiserver.
 // R1 applies to every YAML file in the repo (including legacy folders);
 // R2-R7 apply to the deployable set (deploy/, k8s/platform/) or a rendered file.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -33,6 +42,7 @@ import {
   serviceNamespaces,
   injectedNamespaces,
   isException,
+  secretScopes,
 } from '../lib/contract.mjs';
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'build', '.gradle']);
@@ -207,6 +217,8 @@ export function checkZeroTrust(docs, contract) {
     );
     if (!deny) errors.push(`R7 namespace ${n.name} has no DENY policy for /api/* without a JWT`);
   }
+  errors.push(...checkSecretScoping(docs, contract));
+
   // R9
   const excepted = new Set((contract.exceptions?.workloadInjection || []).map((x) => x.workload));
   for (const n of contract.namespaces) {
@@ -215,6 +227,110 @@ export function checkZeroTrust(docs, contract) {
       if (w.sidecar === false && !excepted.has(ref)) {
         errors.push(`R9 ${ref} runs without a sidecar but has no exceptions.workloadInjection entry`);
       }
+    }
+  }
+  return errors;
+}
+
+/** R10 - secret store scoping and the ExternalSecret admission policy. */
+export function checkSecretScoping(docs, contract) {
+  const sec = contract.secrets;
+  if (!sec) return [];
+  const errors = [];
+  const byKind = (k) => docs.filter((d) => d.doc.kind === k);
+  const stores = new Map(byKind('ClusterSecretStore').map((d) => [d.doc.metadata.name, d]));
+  const scopes = secretScopes(contract);
+  const platformNs = new Set(sec.platformStoreNamespaces);
+  const storeSa = (d) => d.doc.spec?.provider?.aws?.auth?.jwt?.serviceAccountRef?.name;
+
+  // Service store: every condition is the service-namespace selector or names shared namespaces.
+  const svc = stores.get(sec.serviceStore);
+  if (!svc) errors.push(`R10 ClusterSecretStore ${sec.serviceStore} is missing`);
+  else {
+    const conds = svc.doc.spec?.conditions || [];
+    if (conds.length === 0) errors.push(`R10 ${where(svc)}: ${sec.serviceStore} has no spec.conditions (every namespace could use it)`);
+    for (const c of conds) {
+      const sel = c.namespaceSelector;
+      const selOk =
+        sel === undefined ||
+        (isEmpty(sel.matchExpressions) &&
+          JSON.stringify(sel.matchLabels || {}) === JSON.stringify({ 'fintechbankx.io/namespace-kind': 'service' }));
+      const names = c.namespaces || [];
+      const bad = names.filter((n) => !(n in scopes) || platformNs.has(n));
+      if (!selOk) errors.push(`R10 ${where(svc)}: condition namespaceSelector must be exactly fintechbankx.io/namespace-kind=service`);
+      if (bad.length) errors.push(`R10 ${where(svc)}: condition names namespaces outside the service scope: ${bad.join(', ')}`);
+      if (c.namespaceRegexes) errors.push(`R10 ${where(svc)}: condition namespaceRegexes is not allowed`);
+      if (sel === undefined && names.length === 0) errors.push(`R10 ${where(svc)}: empty condition matches every namespace`);
+    }
+    if (storeSa(svc) !== sec.serviceStoreServiceAccount) {
+      errors.push(`R10 ${where(svc)}: must authenticate as service account ${sec.serviceStoreServiceAccount}`);
+    }
+  }
+
+  // Platform store: explicit platform namespaces only, own service account (own IAM role).
+  const pf = stores.get(sec.platformStore);
+  if (!pf) errors.push(`R10 ClusterSecretStore ${sec.platformStore} is missing`);
+  else {
+    const conds = pf.doc.spec?.conditions || [];
+    if (conds.length === 0) errors.push(`R10 ${where(pf)}: ${sec.platformStore} has no spec.conditions`);
+    for (const c of conds) {
+      if (c.namespaceSelector || c.namespaceRegexes) errors.push(`R10 ${where(pf)}: condition must list namespaces by name (no namespaceSelector / namespaceRegexes)`);
+      const bad = (c.namespaces || []).filter((n) => !platformNs.has(n));
+      if (bad.length) errors.push(`R10 ${where(pf)}: condition names non-platform namespaces: ${bad.join(', ')}`);
+      if (!c.namespaceSelector && !c.namespaceRegexes && (c.namespaces || []).length === 0) errors.push(`R10 ${where(pf)}: empty condition matches every namespace`);
+    }
+    if (storeSa(pf) !== sec.platformStoreServiceAccount || storeSa(pf) === sec.serviceStoreServiceAccount) {
+      errors.push(`R10 ${where(pf)}: must use its own service account ${sec.platformStoreServiceAccount} (own IAM role)`);
+    }
+  }
+
+  // ExternalSecrets in the documents (static form of the admission policy).
+  for (const d of byKind('ExternalSecret')) {
+    const ns = d.doc.metadata?.namespace;
+    const spec = d.doc.spec || {};
+    const storeName = spec.secretStoreRef?.name;
+    if (platformNs.has(ns)) {
+      if (storeName !== sec.platformStore) errors.push(`R10 ${where(d)}: platform ExternalSecret must use ${sec.platformStore}, not ${storeName}`);
+      continue;
+    }
+    if (spec.secretStoreRef?.kind !== 'ClusterSecretStore' || storeName !== sec.serviceStore) {
+      errors.push(`R10 ${where(d)}: must use ClusterSecretStore ${sec.serviceStore}, not ${storeName}`);
+    }
+    const allowed = scopes[ns] || [];
+    const isService = serviceNamespaces(contract).some((n) => n.name === ns);
+    const label = d.doc.metadata?.labels?.['app.kubernetes.io/name'];
+    const slugs = isService ? allowed.filter((x) => x === label) : allowed;
+    if (slugs.length === 0) {
+      errors.push(`R10 ${where(d)}: label app.kubernetes.io/name must be one of ${allowed.join(', ') || '(no scope)'}`);
+    }
+    for (const x of spec.data || []) if (x.sourceRef) errors.push(`R10 ${where(d)}: data sourceRef overrides the store`);
+    for (const f of spec.dataFrom || []) {
+      if (f.find) errors.push(`R10 ${where(d)}: dataFrom find is not allowed`);
+      if (f.sourceRef) errors.push(`R10 ${where(d)}: dataFrom sourceRef overrides the store`);
+    }
+    const keys = [...(spec.data || []).map((x) => x.remoteRef?.key), ...(spec.dataFrom || []).map((f) => f.extract?.key)].filter(Boolean);
+    for (const k of keys.map(String)) {
+      // The environment segment is per overlay (ENVIRONMENT in sources, dev|staging|prod rendered).
+      const env = k.split('/')[0];
+      if (!env || !slugs.some((x) => k.startsWith(`${env}/${x}/`))) {
+        errors.push(`R10 ${where(d)}: remote key ${k} is outside <env>/${slugs.join('|') || '?'}/`);
+      }
+    }
+  }
+
+  // The admission policy and its Deny binding.
+  const vap = byKind('ValidatingAdmissionPolicy').find((d) =>
+    (d.doc.spec?.matchConstraints?.resourceRules || []).some(
+      (r) => (r.apiGroups || []).includes('external-secrets.io') && (r.resources || []).includes('externalsecrets') &&
+        ['CREATE', 'UPDATE'].every((o) => (r.operations || []).includes(o)),
+    ),
+  );
+  if (!vap) errors.push('R10 no ValidatingAdmissionPolicy matches CREATE/UPDATE of external-secrets.io externalsecrets');
+  else {
+    if (vap.doc.spec.failurePolicy !== 'Fail') errors.push(`R10 ${where(vap)}: failurePolicy must be Fail`);
+    const binding = byKind('ValidatingAdmissionPolicyBinding').find((b) => b.doc.spec?.policyName === vap.doc.metadata.name);
+    if (!binding || !(binding.doc.spec.validationActions || []).includes('Deny')) {
+      errors.push(`R10 ${where(vap)}: needs a ValidatingAdmissionPolicyBinding with validationActions Deny`);
     }
   }
   return errors;

@@ -64,11 +64,11 @@ schema, policy checks), never applied to a cluster.
 | [contracts/mesh-contract.yaml](contracts/mesh-contract.yaml) | Source of truth: namespaces, service accounts, call edges, exceptions, gaps |
 | [deploy/istio](deploy/istio) | Istio 1.24.3 Helm values (base, istiod HA, ingress gateway behind AWS NLB), per-env overrides |
 | [deploy/kustomize](deploy/kustomize) | Base (generated policies) + overlays `dev`, `staging`, `prod` with `params.env` |
-| [k8s/platform/external-secrets](k8s/platform/external-secrets) | ClusterSecretStore `aws-secrets-manager` (IRSA, SA `external-secrets`) |
+| [k8s/platform/external-secrets](k8s/platform/external-secrets) | ClusterSecretStores `aws-secrets-manager` (service namespaces and `observability`, ESO SA `external-secrets`) and `aws-secrets-manager-platform` (`cert-manager`, `istio-ingress`, `identity` only, ESO SA `external-secrets-platform`), each with its own IRSA role |
 | [k8s/platform/cert-manager](k8s/platform/cert-manager) | ClusterIssuer and trust-manager Bundle `fintechbankx-internal-ca` (key pair from Secrets Manager `<env>/platform/internal-ca`) |
 | [deploy/kustomize/components/corporate-directory](deploy/kustomize/components/corporate-directory) | prod only: Bundle `corporate-directory-ca` and Keycloak LDAPS egress |
 | [scripts/generate](scripts/generate) | Renders `deploy/kustomize/base/generated/*.yaml` from the contract |
-| [scripts/validation](scripts/validation) | `npm run validate:strict-mtls` (rules R1-R9) |
+| [scripts/validation](scripts/validation) | `npm run validate:strict-mtls` (rules R1-R10) |
 | [scripts/ci/validate-manifests.sh](scripts/ci/validate-manifests.sh) | kustomize build, kubeconform with Istio/ESO CRD schemas, istioctl analyze, helm template |
 | [scripts/istio/install-mesh.sh](scripts/istio/install-mesh.sh) | Install order (prints a plan unless `--apply`) |
 | [docs/mesh/DEPLOYABLE_MESH_BASELINE.md](docs/mesh/DEPLOYABLE_MESH_BASELINE.md) | Call graph, gaps, resilience mapping, exceptions, drift fixed |
@@ -101,7 +101,14 @@ A service chart must (platform contract addendum, 2026-10-08):
   probe rewrite) and not ship a PeerAuthentication or DestinationRule that
   weakens mTLS;
 - reference secrets through ClusterSecretStore `aws-secrets-manager`
-  (`platform-secrets` is not valid);
+  (`platform-secrets` is not valid), label each ExternalSecret
+  `app.kubernetes.io/name=<sa>` and read only keys `<env>/<sa>/...`
+  (`spec.data[].remoteRef.key` or `spec.dataFrom[].extract.key`; no
+  `dataFrom.find`, no `sourceRef`). The ValidatingAdmissionPolicy
+  `fintechbankx-externalsecret-scope` (generated, Kubernetes 1.30+) rejects
+  anything else in a service namespace; platform keys (`<env>/platform/*`,
+  `<env>/identity-keycloak/*`) are only reachable through
+  `aws-secrets-manager-platform` from the platform namespaces;
 - validate JWT issuer `https://<identity-host>/realms/fintechbankx` and an
   `aud` containing its own service id.
 

@@ -27,7 +27,7 @@ kubeconform_run() {
 for env in dev staging prod; do
   echo "== overlay $env"
   "$KUSTOMIZE" build "$ROOT/deploy/kustomize/overlays/$env" > "$OUT/mesh-$env.yaml"
-  if grep -nE 'IDENTITY_HOST|API_HOST|AWS_REGION|ENVIRONMENT/|192\.0\.2\.' "$OUT/mesh-$env.yaml"; then
+  if grep -nE 'IDENTITY_HOST|API_HOST|AWS_REGION|ENVIRONMENT|PLATFORM_SECRETS_ROLE_ARN|192\.0\.2\.' "$OUT/mesh-$env.yaml"; then
     echo "unsubstituted placeholder in overlay $env" >&2
     exit 1
   fi

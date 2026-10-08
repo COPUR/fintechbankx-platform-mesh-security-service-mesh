@@ -81,6 +81,8 @@ replacements:
         options: {delimiter: ., index: 2}
       - select: {kind: ClusterSecretStore, name: aws-secrets-manager}
         fieldPaths: [spec.provider.aws.region]
+      - select: {kind: ClusterSecretStore, name: aws-secrets-manager-platform}
+        fieldPaths: [spec.provider.aws.region]
   - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.ENVIRONMENT}
     targets:
       - select: {kind: ExternalSecret, name: fintechbankx-ingress-tls}
@@ -89,3 +91,13 @@ replacements:
       - select: {kind: ExternalSecret, name: fintechbankx-internal-ca-keypair}
         fieldPaths: [spec.data.0.remoteRef.key, spec.data.1.remoteRef.key]
         options: {delimiter: /, index: 0}
+      # Environment segment the ExternalSecret admission policy requires on
+      # every remote key: the CEL literal 'ENVIRONMENT' -> 'dev' | 'staging' | 'prod'.
+      - select: {kind: ValidatingAdmissionPolicy, name: fintechbankx-externalsecret-scope}
+        fieldPaths: ["spec.variables.[name=env].expression"]
+        options: {delimiter: "'", index: 1}
+  # IRSA role of the platform store's ESO service account (terraform-modules output).
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.PLATFORM_SECRETS_ROLE_ARN}
+    targets:
+      - select: {kind: ServiceAccount, name: external-secrets-platform}
+        fieldPaths: ["metadata.annotations.[eks.amazonaws.com/role-arn]"]

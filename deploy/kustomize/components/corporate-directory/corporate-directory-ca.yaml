@@ -12,7 +12,7 @@ spec:
   refreshInterval: 1h
   secretStoreRef:
     kind: ClusterSecretStore
-    name: aws-secrets-manager
+    name: aws-secrets-manager-platform
   target:
     name: corporate-directory-ca-source
     creationPolicy: Owner

@@ -19,6 +19,7 @@ resources:
   - generated/sidecars.yaml
   - generated/ingress-routing.yaml
   - generated/network-policies.yaml
+  - generated/externalsecret-admission.yaml
   - ingress-tls-externalsecret.yaml
   - ../../../k8s/platform/external-secrets
   - ../../../k8s/platform/cert-manager

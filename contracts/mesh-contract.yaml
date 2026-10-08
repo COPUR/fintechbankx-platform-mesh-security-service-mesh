@@ -295,6 +295,33 @@ namespaces:
     injection: disabled
     workloads: []
 
+# Secret delivery (External Secrets Operator -> AWS Secrets Manager), security
+# review 2026-10-08. Two ClusterSecretStores, each with its own ESO service
+# account and IRSA role (k8s/platform/external-secrets):
+#  - serviceStore: service namespaces (label fintechbankx.io/namespace-kind=
+#    service) plus sharedStoreNamespaces; its role must not read platform keys.
+#  - platformStore: only platformStoreNamespaces; holds the internal CA key,
+#    ingress TLS and the Keycloak bootstrap/admin material.
+# The generated ValidatingAdmissionPolicy (externalsecret-admission.yaml) makes
+# every ExternalSecret in a governed namespace use serviceStore and read only
+# keys <env>/<slug>/...: in a service namespace <slug> is the ExternalSecret's
+# app.kubernetes.io/name label and must be one of that namespace's service
+# accounts (payments holds four services); in a shared namespace <slug> is one
+# of its listed slugs.
+secrets:
+  serviceStore: aws-secrets-manager
+  serviceStoreServiceAccount: external-secrets
+  platformStore: aws-secrets-manager-platform
+  platformStoreServiceAccount: external-secrets-platform
+  platformStoreNamespaces: [cert-manager, istio-ingress, identity]
+  # Second path segment of keys that only the platform store may read.
+  platformKeyPrefixes: [platform, identity-keycloak]
+  # Platform namespaces that stay on the service store, with their key slugs
+  # (observability repo deploy/kustomize/prereqs: <env>/observability/*,
+  # <env>/observability-grafana/oidc-client).
+  sharedStoreNamespaces:
+    observability: [observability, observability-grafana]
+
 # Documented exceptions. The validator fails on any weakening not listed here.
 exceptions:
   injection:

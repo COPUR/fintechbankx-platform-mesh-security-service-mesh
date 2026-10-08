@@ -19,6 +19,7 @@ import {
   expandEdges,
   isException,
   resolveWorkload,
+  secretScopes,
 } from '../lib/contract.mjs';
 
 export const outDir = join(repoRoot, 'deploy', 'kustomize', 'base', 'generated');
@@ -783,6 +784,125 @@ function networkPolicies(contract) {
   return docs;
 }
 
+
+// ------------------------------------------------ external secret admission
+// ValidatingAdmissionPolicy (admissionregistration.k8s.io/v1, Kubernetes
+// 1.30+) that keeps every ExternalSecret in a governed namespace on the
+// service store and inside its own <env>/<slug>/ keys. Governed: every
+// contract namespace (label fintechbankx.io/namespace-kind) except the
+// platform-store namespaces. Namespaces without a scope entry get no slugs,
+// so their ExternalSecrets are rejected (fail closed).
+const cel = (s) => `'${s}'`;
+
+function externalSecretAdmission(contract) {
+  const sec = contract.secrets;
+  const scopes = secretScopes(contract);
+  const scopeMap =
+    '{' + Object.entries(scopes).map(([ns, slugs]) => `${cel(ns)}: [${slugs.map(cel).join(', ')}]`).join(', ') + '}';
+  const name = 'fintechbankx-externalsecret-scope';
+  const policy = {
+    apiVersion: 'admissionregistration.k8s.io/v1',
+    kind: 'ValidatingAdmissionPolicy',
+    metadata: {
+      name,
+      annotations: {
+        'fintechbankx.io/purpose':
+          `ExternalSecrets outside ${sec.platformStoreNamespaces.join(', ')} must use ClusterSecretStore ${sec.serviceStore} ` +
+          'and read only <env>/<slug>/ keys; in service namespaces <slug> is the app.kubernetes.io/name label and must be ' +
+          'a service account of that namespace.',
+      },
+    },
+    spec: {
+      failurePolicy: 'Fail',
+      matchConstraints: {
+        resourceRules: [
+          { apiGroups: ['external-secrets.io'], apiVersions: ['*'], operations: ['CREATE', 'UPDATE'], resources: ['externalsecrets'] },
+        ],
+        namespaceSelector: {
+          matchExpressions: [
+            { key: 'fintechbankx.io/namespace-kind', operator: 'Exists' },
+            { key: 'kubernetes.io/metadata.name', operator: 'NotIn', values: sec.platformStoreNamespaces },
+          ],
+        },
+      },
+      variables: [
+        // Replaced per overlay (mesh-params ENVIRONMENT).
+        { name: 'env', expression: cel('ENVIRONMENT') },
+        { name: 'scopes', expression: scopeMap },
+        {
+          name: 'allowed',
+          expression: 'request.namespace in variables.scopes ? variables.scopes[request.namespace] : []',
+        },
+        {
+          name: 'serviceNamespace',
+          expression:
+            "has(namespaceObject.metadata.labels) && 'fintechbankx.io/namespace-kind' in namespaceObject.metadata.labels && " +
+            "namespaceObject.metadata.labels['fintechbankx.io/namespace-kind'] == 'service'",
+        },
+        {
+          name: 'slug',
+          expression:
+            "has(object.metadata.labels) && 'app.kubernetes.io/name' in object.metadata.labels ? " +
+            "object.metadata.labels['app.kubernetes.io/name'] : ''",
+        },
+        {
+          name: 'slugs',
+          expression: 'variables.serviceNamespace ? variables.allowed.filter(s, s == variables.slug) : variables.allowed',
+        },
+        { name: 'prefixes', expression: "variables.slugs.map(s, variables.env + '/' + s + '/')" },
+        {
+          name: 'keys',
+          expression:
+            '(has(object.spec.data) ? object.spec.data.filter(d, has(d.remoteRef)).map(d, d.remoteRef.key) : []) + ' +
+            '(has(object.spec.dataFrom) ? object.spec.dataFrom.filter(f, has(f.extract)).map(f, f.extract.key) : [])',
+        },
+      ],
+      validations: [
+        {
+          expression: 'variables.slugs.size() > 0',
+          messageExpression:
+            "variables.allowed.size() == 0 ? 'namespace ' + request.namespace + ' has no secret scope in the mesh contract' : " +
+            "'ExternalSecret in service namespace ' + request.namespace + " +
+            "' must carry label app.kubernetes.io/name set to one of its service accounts: ' + variables.allowed.join(', ')",
+          reason: 'Forbidden',
+        },
+        {
+          expression:
+            `has(object.spec.secretStoreRef) && object.spec.secretStoreRef.kind == 'ClusterSecretStore' && ` +
+            `object.spec.secretStoreRef.name == ${cel(sec.serviceStore)}`,
+          message: `secretStoreRef must be ClusterSecretStore ${sec.serviceStore}`,
+          reason: 'Forbidden',
+        },
+        {
+          expression: '!has(object.spec.data) || object.spec.data.all(d, !has(d.sourceRef) && has(d.remoteRef))',
+          message: 'spec.data entries must use remoteRef and may not override the store (sourceRef)',
+          reason: 'Forbidden',
+        },
+        {
+          expression:
+            '!has(object.spec.dataFrom) || object.spec.dataFrom.all(f, !has(f.sourceRef) && !has(f.find) && has(f.extract))',
+          message: 'spec.dataFrom entries must use extract with an explicit key (no find, no sourceRef)',
+          reason: 'Forbidden',
+        },
+        {
+          expression: 'variables.slugs.size() == 0 || variables.keys.all(k, variables.prefixes.exists(p, k.startsWith(p)))',
+          messageExpression:
+            "'every remote key must start with ' + variables.prefixes.join(' or ') + '; got ' + " +
+            'variables.keys.filter(k, !variables.prefixes.exists(p, k.startsWith(p))).join(\', \')',
+          reason: 'Forbidden',
+        },
+      ],
+    },
+  };
+  const binding = {
+    apiVersion: 'admissionregistration.k8s.io/v1',
+    kind: 'ValidatingAdmissionPolicyBinding',
+    metadata: { name },
+    spec: { policyName: name, validationActions: ['Deny'] },
+  };
+  return [policy, binding];
+}
+
 // --------------------------------------------------------------------- write
 export function render(contract = loadContract()) {
   return {
@@ -795,6 +915,7 @@ export function render(contract = loadContract()) {
     'sidecars.yaml': sidecars(contract),
     'ingress-routing.yaml': ingressRouting(contract),
     'network-policies.yaml': networkPolicies(contract),
+    'externalsecret-admission.yaml': externalSecretAdmission(contract),
   };
 }
 
