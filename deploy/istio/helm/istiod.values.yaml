@@ -65,6 +65,30 @@ meshConfig:
     normalization: MERGE_SLASHES
   accessLogFile: /dev/stdout
   accessLogEncoding: JSON
+  # Debugging and correlation fields only (tests/access-log.test.mjs). The
+  # path is logged without its query string (queries can carry identifiers
+  # and OAuth codes; Istio adds the envoy.formatter.req_without_query
+  # extension when the format uses %REQ_WITHOUT_QUERY%). Never logged:
+  # x-forwarded-for, the downstream remote address, user agent and
+  # credentials (Authorization, DPoP, cookies).
+  accessLogFormat: |
+    {
+      "start_time": "%START_TIME%",
+      "method": "%REQ(:METHOD)%",
+      "path": "%REQ_WITHOUT_QUERY(X-ENVOY-ORIGINAL-PATH?:PATH)%",
+      "protocol": "%PROTOCOL%",
+      "response_code": "%RESPONSE_CODE%",
+      "response_code_details": "%RESPONSE_CODE_DETAILS%",
+      "response_flags": "%RESPONSE_FLAGS%",
+      "duration": "%DURATION%",
+      "bytes_received": "%BYTES_RECEIVED%",
+      "bytes_sent": "%BYTES_SENT%",
+      "route_name": "%ROUTE_NAME%",
+      "upstream_cluster": "%UPSTREAM_CLUSTER%",
+      "x_request_id": "%REQ(X-REQUEST-ID)%",
+      "traceparent": "%REQ(TRACEPARENT)%",
+      "x_fapi_interaction_id": "%REQ(X-FAPI-INTERACTION-ID)%"
+    }
   # Sidecar agent serves app + Envoy metrics on 15020 (/stats/prometheus);
   # Prometheus scrapes service pods there, outside mTLS interception.
   enablePrometheusMerge: true
