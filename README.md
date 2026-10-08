@@ -68,7 +68,7 @@ schema, policy checks), never applied to a cluster.
 | [k8s/platform/cert-manager](k8s/platform/cert-manager) | ClusterIssuer and trust-manager Bundle `fintechbankx-internal-ca` (key pair from Secrets Manager `<env>/platform/internal-ca`) |
 | [deploy/kustomize/components/corporate-directory](deploy/kustomize/components/corporate-directory) | prod only: Bundle `corporate-directory-ca` and Keycloak LDAPS egress |
 | [scripts/generate](scripts/generate) | Renders `deploy/kustomize/base/generated/*.yaml` from the contract |
-| [scripts/validation](scripts/validation) | `npm run validate:strict-mtls` (rules R1-R10) |
+| [scripts/validation](scripts/validation) | `npm run validate:strict-mtls` (rules R1-R12) |
 | [scripts/ci/validate-manifests.sh](scripts/ci/validate-manifests.sh) | kustomize build, kubeconform with Istio/ESO CRD schemas, istioctl analyze, helm template |
 | [scripts/istio/install-mesh.sh](scripts/istio/install-mesh.sh) | Install order (prints a plan unless `--apply`) |
 | [docs/mesh/DEPLOYABLE_MESH_BASELINE.md](docs/mesh/DEPLOYABLE_MESH_BASELINE.md) | Call graph, gaps, resilience mapping, exceptions, drift fixed |

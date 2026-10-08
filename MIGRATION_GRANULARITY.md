@@ -33,3 +33,6 @@
   and the service threads; recorded in `contracts/mesh-contract.yaml`.
 - Repository name in this file's header predates the rename to
   `fintechbankx-platform-mesh-security-service-mesh`.
+- Retired from the seeded `security/service-architecture/service-mesh-config.yaml`:
+  the Telemetry `banking-telemetry`, which tagged metrics and spans with customer
+  and transaction ids (validator rule R12 keeps such tags out).

@@ -8,6 +8,7 @@ import {
   checkMtlsModes,
   checkZeroTrust,
   checkGenerated,
+  checkTelemetryTags,
   parseDocs,
 } from '../scripts/validation/validate-strict-mtls.mjs';
 import { loadContract, expandEdges, knownServiceAccounts, secretScopes } from '../scripts/lib/contract.mjs';
@@ -574,4 +575,35 @@ test('R11 rejects any ALLOW path pattern that covers /internal/* on any service'
     { paths: ['/*'], notPaths: ['/internal/*'] },
   );
   assert.deepEqual(r11(excluded), []);
+});
+
+// ------------------------------------------------------------------ R12
+// Customer and account identifiers never become metric labels, span tags or
+// access-log fields through an Istio Telemetry resource (cardinality and PII).
+const telemetry = (spec) =>
+  parseDocs(YAML_TELEMETRY_HEADER + JSON.stringify(spec) + '\n', 'inline.yaml');
+const YAML_TELEMETRY_HEADER = 'apiVersion: telemetry.istio.io/v1\nkind: Telemetry\nmetadata: {name: t, namespace: lending}\nspec: ';
+
+test('R12 no Telemetry anywhere in the repo tags customer or account identifiers', () => {
+  assert.deepEqual(checkTelemetryTags(all), []);
+});
+
+test('R12 rejects customer/account identifiers in metric tags, span tags and access-log filters', () => {
+  const bad = [
+    { metrics: [{ overrides: [{ tagOverrides: { banking_customer_id: { value: '%{DEPLOYMENT_NAME}' } } }] }] },
+    { metrics: [{ overrides: [{ tagOverrides: { request_actor: { value: 'request.headers["x-customer-id"]' } } }] }] },
+    { metrics: [{ overrides: [{ tagOverrides: { acct: { value: 'request.headers["x-account-number"]' } } }] }] },
+    { tracing: [{ customTags: { customer_id: { header: { name: 'x-request-id' } } } }] },
+    { tracing: [{ customTags: { owner: { header: { name: 'x-account-id' } } } }] },
+    { tracing: [{ customTags: { payer: { literal: { value: 'iban' } } } }] },
+    { accessLogging: [{ filter: { expression: 'request.headers["x-customer-id"] != ""' } }] },
+  ];
+  for (const spec of bad) {
+    assert.ok(hasRule(checkTelemetryTags(telemetry(spec)), 'R12', 'Telemetry/lending/t'), JSON.stringify(spec));
+  }
+  const ok = [
+    { metrics: [{ overrides: [{ tagOverrides: { source_service_account: { value: 'source.principal' } } }] }] },
+    { tracing: [{ customTags: { cell: { environment: { name: 'CELL_ID' } } } }] },
+  ];
+  for (const spec of ok) assert.deepEqual(checkTelemetryTags(telemetry(spec)), [], JSON.stringify(spec));
 });

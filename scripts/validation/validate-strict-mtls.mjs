@@ -36,7 +36,10 @@
 //     /oauth2/token), including selector-less ALLOWs in open-finance; and no
 //     ALLOW path pattern on any workload covers /internal/* unless the same
 //     operation excludes /internal/* in notPaths.
-// R1 applies to every YAML file in the repo (including legacy folders);
+//  R12 no Istio Telemetry tags metrics or spans, or filters access logs, on
+//     customer or account identifiers (tag names, header names, values,
+//     expressions): PII and unbounded label cardinality.
+// R1 and R12 apply to every YAML file in the repo (including legacy folders);
 // R2-R7 apply to the deployable set (deploy/, k8s/platform/) or a rendered file.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -102,6 +105,36 @@ export function checkMtlsModes(docs, contract) {
       ];
       if (inMesh && tlsModes.includes('DISABLE')) {
         errors.push(`R1 ${where(d)}: DestinationRule disables TLS for in-mesh host ${host}`);
+      }
+    }
+  }
+  return errors;
+}
+
+// customer / account / IBAN / PSU identifiers; "service_account" and
+// "serviceaccount" are workload identities, not customer data.
+const IDENTIFIER = /customer|(?<!service[_-]?)account|\biban\b|iban[_-]|psu[_-]?id/i;
+
+/** R12 - applies to every manifest. */
+export function checkTelemetryTags(docs) {
+  const errors = [];
+  for (const d of docs.filter((x) => x.doc.kind === 'Telemetry')) {
+    const spec = d.doc.spec || {};
+    const found = [];
+    for (const m of spec.metrics || []) {
+      for (const o of m.overrides || []) {
+        for (const [tag, v] of Object.entries(o.tagOverrides || {})) found.push([`metrics tag ${tag}`, tag, JSON.stringify(v)]);
+      }
+    }
+    for (const t of spec.tracing || []) {
+      for (const [tag, v] of Object.entries(t.customTags || {})) found.push([`tracing tag ${tag}`, tag, JSON.stringify(v)]);
+    }
+    for (const a of spec.accessLogging || []) {
+      if (a.filter?.expression) found.push(['accessLogging filter', '', a.filter.expression]);
+    }
+    for (const [what, ...texts] of found) {
+      if (texts.some((t) => IDENTIFIER.test(t))) {
+        errors.push(`R12 ${where(d)}: ${what} uses a customer or account identifier`);
       }
     }
   }
@@ -419,12 +452,17 @@ async function main() {
   if (idx > 0) {
     const file = process.argv[idx + 1];
     const docs = parseDocs(readFileSync(file, 'utf8'), file);
-    errors = [...checkMtlsModes(docs, contract), ...checkZeroTrust(docs, contract)];
+    errors = [...checkMtlsModes(docs, contract), ...checkTelemetryTags(docs), ...checkZeroTrust(docs, contract)];
     console.log(`checked ${docs.length} rendered documents from ${file}`);
   } else {
     const all = loadRepoDocs();
     const deployable = all.filter((d) => DEPLOYABLE.some((p) => d.file.startsWith(p)));
-    errors = [...checkMtlsModes(all, contract), ...checkZeroTrust(deployable, contract), ...(await checkGenerated())];
+    errors = [
+      ...checkMtlsModes(all, contract),
+      ...checkTelemetryTags(all),
+      ...checkZeroTrust(deployable, contract),
+      ...(await checkGenerated()),
+    ];
     console.log(`checked ${all.length} documents (${deployable.length} deployable)`);
   }
   if (errors.length) {
