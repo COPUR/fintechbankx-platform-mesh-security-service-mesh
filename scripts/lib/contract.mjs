@@ -40,38 +40,87 @@ export function knownServiceAccounts(contract) {
   return out;
 }
 
+/** Principals that can actually be presented: workloads with a sidecar, and the gateway. */
 export function knownPrincipals(contract) {
+  const meshed = new Set();
+  for (const n of contract.namespaces) {
+    for (const w of n.workloads || []) if (w.sidecar !== false) meshed.add(`${n.name}/${w.serviceAccount}`);
+  }
+  meshed.add(`${contract.gateway.namespace}/${contract.gateway.serviceAccount}`);
   return new Set(
-    [...knownServiceAccounts(contract)].map((s) => {
+    [...meshed].map((s) => {
       const [ns, sa] = s.split('/');
       return principal(contract, ns, sa);
     }),
   );
 }
 
-function expandEndpoint(contract, ref) {
-  if (ref === '*/service-workloads') {
-    return serviceWorkloads(contract).map((w) => ({ ns: w.ns, sa: w.serviceAccount }));
+/**
+ * Resolve a workload reference `ns/name` to its identity and pod selector.
+ * `name` is the workload's `name` (defaults to its service account). Several
+ * workloads may share one service account (Tempo, Loki components); the
+ * SPIFFE principal comes from the service account, the pod selector from the
+ * workload's `selector` (default app.kubernetes.io/name=<service account>).
+ */
+export function resolveWorkload(contract, ns, name) {
+  if (ns === contract.gateway.namespace && name === contract.gateway.serviceAccount) {
+    return {
+      ns, sa: name, name, selector: contract.gateway.selector, sidecar: true,
+      service: null, destinationRule: false,
+    };
   }
-  const [ns, sa] = ref.split('/');
-  return [{ ns, sa }];
+  const n = contract.namespaces.find((x) => x.name === ns);
+  const w = (n?.workloads || []).find((x) => (x.name || x.serviceAccount) === name);
+  if (!w) return { ns, sa: name, name, selector: { 'app.kubernetes.io/name': name }, sidecar: true, service: name };
+  return {
+    ns,
+    sa: w.serviceAccount,
+    name: w.name || w.serviceAccount,
+    selector: w.selector || { 'app.kubernetes.io/name': w.serviceAccount },
+    sidecar: w.sidecar !== false,
+    service: w.service === undefined ? w.serviceAccount : w.service,
+    destinationRule: w.destinationRule !== false,
+  };
 }
 
-/** Expand wildcard edges into concrete caller -> callee pairs. */
+function expandEndpoint(contract, ref) {
+  if (ref === '*/service-workloads') {
+    return serviceWorkloads(contract).map((w) => resolveWorkload(contract, w.ns, w.name || w.serviceAccount));
+  }
+  // Every workload that carries an Istio sidecar, in every injected namespace,
+  // plus the ingress gateway (Envoy tracing and OTLP from platform components).
+  if (ref === '*/mesh-workloads') {
+    const out = [resolveWorkload(contract, contract.gateway.namespace, contract.gateway.serviceAccount)];
+    for (const n of injectedNamespaces(contract)) {
+      for (const w of n.workloads || []) {
+        const r = resolveWorkload(contract, n.name, w.name || w.serviceAccount);
+        if (r.sidecar && !out.some((o) => o.ns === r.ns && o.sa === r.sa)) out.push(r);
+      }
+    }
+    return out;
+  }
+  const [ns, name] = ref.split('/');
+  return [resolveWorkload(contract, ns, name)];
+}
+
+/** Expand wildcard edges (and multi-port edges) into concrete caller -> callee pairs. */
 export function expandEdges(contract) {
   const out = [];
   for (const e of contract.edges) {
+    const ports = e.ports || [e.port];
     for (const from of expandEndpoint(contract, e.from)) {
       for (const to of expandEndpoint(contract, e.to)) {
-        out.push({
-          from,
-          to,
-          port: e.port,
-          methods: e.methods,
-          paths: e.paths,
-          scope: e.scope,
-          evidence: e.evidence,
-        });
+        for (const port of ports) {
+          out.push({
+            from,
+            to,
+            port,
+            methods: e.methods,
+            paths: e.paths,
+            scope: e.scope,
+            evidence: e.evidence,
+          });
+        }
       }
     }
   }

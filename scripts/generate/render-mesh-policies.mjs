@@ -18,6 +18,7 @@ import {
   serviceWorkloads,
   expandEdges,
   isException,
+  resolveWorkload,
 } from '../lib/contract.mjs';
 
 export const outDir = join(repoRoot, 'deploy', 'kustomize', 'base', 'generated');
@@ -148,7 +149,9 @@ function authorizationPolicies(contract) {
   // Edge-derived ALLOW policies, one per (caller, callee).
   const grouped = new Map();
   for (const e of expandEdges(contract)) {
-    const key = `${e.to.ns}/${e.to.sa}|${e.from.ns}/${e.from.sa}`;
+    if (!e.from.sidecar) throw new Error(`edge from ${e.from.ns}/${e.from.name}: workload has no sidecar, it cannot present a principal`);
+    if (!e.to.sidecar) continue; // no sidecar on the callee: NetworkPolicy only
+    const key = `${e.to.ns}/${e.to.name}|${e.from.ns}/${e.from.sa}`;
     if (!grouped.has(key)) grouped.set(key, { to: e.to, from: e.from, ops: [], evidence: [] });
     const g = grouped.get(key);
     const op = { ports: [String(e.port)] };
@@ -158,18 +161,18 @@ function authorizationPolicies(contract) {
     if (e.evidence) g.evidence.push(e.evidence);
   }
   for (const g of [...grouped.values()].sort((a, b) =>
-    `${a.to.ns}/${a.to.sa}/${a.from.ns}/${a.from.sa}`.localeCompare(`${b.to.ns}/${b.to.sa}/${b.from.ns}/${b.from.sa}`),
+    `${a.to.ns}/${a.to.name}/${a.from.ns}/${a.from.sa}`.localeCompare(`${b.to.ns}/${b.to.name}/${b.from.ns}/${b.from.sa}`),
   )) {
     docs.push({
       apiVersion: SEC,
       kind: 'AuthorizationPolicy',
       metadata: {
-        name: `${policyName(g.from)}-to-${g.to.sa}`,
+        name: `${policyName(g.from)}-to-${g.to.name}`,
         namespace: g.to.ns,
         annotations: { 'fintechbankx.io/evidence': [...new Set(g.evidence)].join(' | ') },
       },
       spec: {
-        selector: { matchLabels: nameLabel(g.to.sa) },
+        selector: { matchLabels: g.to.selector },
         action: 'ALLOW',
         rules: g.ops.map((op) => ({
           from: [{ source: { principals: [principal(contract, g.from.ns, g.from.sa)] } }],
@@ -261,20 +264,25 @@ const RESILIENCE = {
 function destinationRules(contract) {
   const docs = [];
   const callees = new Map();
-  for (const w of serviceWorkloads(contract)) callees.set(`${w.ns}/${w.serviceAccount}`, w);
+  for (const w of serviceWorkloads(contract)) {
+    const r = resolveWorkload(contract, w.ns, w.name || w.serviceAccount);
+    callees.set(`${r.ns}/${r.name}`, r);
+  }
   for (const e of expandEdges(contract)) {
     if (e.to.ns === contract.gateway.namespace) continue;
     if (e.to.sa === 'openldap') continue; // plain TCP/LDAP, no HTTP pool semantics
-    callees.set(`${e.to.ns}/${e.to.sa}`, { ns: e.to.ns, serviceAccount: e.to.sa });
+    // Stateful or internal platform components keep Istio defaults (no ejection).
+    if (!e.to.destinationRule || !e.to.sidecar || !e.to.service) continue;
+    callees.set(`${e.to.ns}/${e.to.name}`, e.to);
   }
   for (const key of [...callees.keys()].sort()) {
-    const { ns, serviceAccount } = callees.get(key);
+    const { ns, name, service } = callees.get(key);
     docs.push({
       apiVersion: NET,
       kind: 'DestinationRule',
-      metadata: { name: serviceAccount, namespace: ns },
+      metadata: { name, namespace: ns },
       spec: {
-        host: `${serviceAccount}.${ns}.svc.cluster.local`,
+        host: `${service}.${ns}.svc.cluster.local`,
         exportTo: ['*'],
         trafficPolicy: {
           loadBalancer: { simple: 'LEAST_REQUEST', localityLbSetting: { enabled: true } },
@@ -466,7 +474,7 @@ function peerSelector(contract, ref) {
   if (ref.ns === contract.gateway.namespace && ref.sa === contract.gateway.serviceAccount) {
     return { ...nsSel(ref.ns), podSelector: { matchLabels: contract.gateway.selector } };
   }
-  return { ...nsSel(ref.ns), podSelector: { matchLabels: nameLabel(ref.sa) } };
+  return { ...nsSel(ref.ns), podSelector: { matchLabels: ref.selector } };
 }
 
 function networkPolicies(contract) {
@@ -571,34 +579,34 @@ function networkPolicies(contract) {
       if (e.to.ns === ns && e.from.ns !== ns) {
         const k = `${e.from.ns}`;
         if (!inbound.has(k)) inbound.set(k, { peers: new Map(), ports: new Set() });
-        inbound.get(k).peers.set(`${e.from.ns}/${e.from.sa}`, e.from);
+        inbound.get(k).peers.set(`${e.from.ns}/${e.from.name}`, e.from);
         inbound.get(k).ports.add(e.port);
       }
       if (e.from.ns === ns && e.to.ns !== ns) {
         const k = `${e.to.ns}`;
         if (!outbound.has(k)) outbound.set(k, { peers: new Map(), ports: new Set() });
-        outbound.get(k).peers.set(`${e.to.ns}/${e.to.sa}`, e.to);
+        outbound.get(k).peers.set(`${e.to.ns}/${e.to.name}`, e.to);
         outbound.get(k).ports.add(e.port);
       }
       if (e.from.ns === ns && e.to.ns === ns) {
-        inbound.set(`self:${e.to.sa}:${e.port}`, { self: true, e });
+        inbound.set(`self:${e.from.name}:${e.to.name}:${e.port}`, { self: true, e });
       }
     }
     for (const [k, v] of [...inbound.entries()].sort()) {
       if (v.self) {
         const { e } = v;
         docs.push(
-          np(ns, `allow-ingress-${e.from.sa}-to-${e.to.sa}-${e.port}`, {
-            podSelector: { matchLabels: nameLabel(e.to.sa) },
+          np(ns, `allow-ingress-${e.from.name}-to-${e.to.name}-${e.port}`, {
+            podSelector: { matchLabels: e.to.selector },
             policyTypes: ['Ingress'],
-            ingress: [{ from: [{ podSelector: { matchLabels: nameLabel(e.from.sa) } }], ports: tcp([e.port]) }],
+            ingress: [{ from: [{ podSelector: { matchLabels: e.from.selector } }], ports: tcp([e.port]) }],
           }),
         );
         docs.push(
-          np(ns, `allow-egress-${e.from.sa}-to-${e.to.sa}-${e.port}`, {
-            podSelector: { matchLabels: nameLabel(e.from.sa) },
+          np(ns, `allow-egress-${e.from.name}-to-${e.to.name}-${e.port}`, {
+            podSelector: { matchLabels: e.from.selector },
             policyTypes: ['Egress'],
-            egress: [{ to: [{ podSelector: { matchLabels: nameLabel(e.to.sa) } }], ports: tcp([e.port]) }],
+            egress: [{ to: [{ podSelector: { matchLabels: e.to.selector } }], ports: tcp([e.port]) }],
           }),
         );
         continue;
