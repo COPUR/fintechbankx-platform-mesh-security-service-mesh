@@ -100,6 +100,15 @@ A service chart must (platform contract addendum, 2026-10-08):
 - not set `traffic.sidecar.istio.io/excludeInboundPorts` (probes use Istio's
   probe rewrite) and not ship a PeerAuthentication or DestinationRule that
   weakens mTLS;
+- may set `traffic.sidecar.istio.io/excludeOutboundPorts` only for datastore
+  and broker ports that carry their own TLS (5432 Aurora with `verify-full`,
+  27017 DocumentDB, 6379 Redis with TLS, 9093 Strimzi mutual TLS); the
+  workload's egress NetworkPolicy still limits where those ports go;
+- run a Flyway migration Job either with the sidecar (native sidecar, the
+  default) or with `sidecar.istio.io/inject: "false"`; a sidecar-less Job is
+  admitted, must carry the same `app.kubernetes.io/name=<sa>` label so its
+  datastore egress applies, and can reach only its database, never a mesh
+  service (STRICT mTLS);
 - reference secrets through ClusterSecretStore `aws-secrets-manager`
   (`platform-secrets` is not valid), label each ExternalSecret
   `app.kubernetes.io/name=<sa>` and read only keys `<env>/<sa>/...`
