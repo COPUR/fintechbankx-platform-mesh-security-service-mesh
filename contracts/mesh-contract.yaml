@@ -87,7 +87,7 @@ namespaces:
         serviceId: svc-rsk-decisioning
         sourceRepo: fintechbankx-riskcompliance-risk-decisioning-core
         apiPrefix: /api/v1/risk
-        datastores: [aurora-postgresql]
+        datastores: [aurora-postgresql, msk]
   - name: compliance
     context: compliance
     kind: service
@@ -96,7 +96,7 @@ namespaces:
         serviceId: svc-cmp-evidence
         sourceRepo: fintechbankx-riskcompliance-compliance-evidence-core
         apiPrefix: /api/v1/compliance
-        datastores: [aurora-postgresql]
+        datastores: [aurora-postgresql, msk]
   - name: open-finance
     context: open-finance
     kind: service
@@ -344,16 +344,21 @@ edges:
     to: customer/customer-profile-kyc-service
     port: 8080
     paths: [/api/v1/customers, /api/v1/customers/*]
+    # Service-only credit operations stay off the public gateway (review
+    # finding, customer thread 2026-10-08): only loan-lifecycle calls them.
+    notPaths: ["/api/v1/customers/{*}/credit", "/api/v1/customers/{*}/credit/reserve", "/api/v1/customers/{*}/credit/release"]
     evidence: customer-infrastructure CustomerController @RequestMapping("/api/v1/customers")
   - from: istio-ingress/istio-ingressgateway
     to: risk/risk-decisioning-service
     port: 8080
     paths: [/api/v1/risk, /api/v1/risk/*]
+    notPaths: [/api/v1/risk/assess]   # called by payments only (service-only, review finding)
     evidence: risk controller @RequestMapping("/api/v1/risk")
   - from: istio-ingress/istio-ingressgateway
     to: compliance/compliance-evidence-service
     port: 8080
     paths: [/api/v1/compliance, /api/v1/compliance/*]
+    notPaths: [/api/v1/compliance/screen]   # called by payments only (service-only, review finding)
     evidence: compliance controller @RequestMapping("/api/v1/compliance")
   - from: istio-ingress/istio-ingressgateway
     to: identity/keycloak
@@ -473,6 +478,15 @@ edges:
     methods: [POST]
     paths: [/realms/fintechbankx/protocol/openid-connect/token]
     evidence: platform contract - one confidential client per service, client-credentials
+  - from: customer/customer-profile-kyc-service
+    to: identity/keycloak
+    port: 8080
+    methods: [GET, PUT]
+    paths: [/admin/realms/fintechbankx/users, /admin/realms/fintechbankx/users/*]
+    evidence: >-
+      Customer thread 2026-10-08 (customer PR #13): PUT /api/v1/customers/{id}/identity-link
+      sets the user attribute customer_id through the Keycloak admin API as
+      svc-cus-profile-kyc (realm-management manage-users, identity PR #11).
 
   # Telemetry: OTLP to the collector is covered by the */mesh-workloads edge
   # below (platform contract: otel-collector.observability.svc.cluster.local:4317/4318).
@@ -724,8 +738,3 @@ gaps:
       /open-finance/v1/vrp, /open-finance/v1/file-payments and copies of
       /open-finance/v1/{accounts,consents,loans}, which overlap open-finance
       routes, so no gateway route is added until the owners confirm them.
-  - from: risk/risk-decisioning-service, compliance/compliance-evidence-service
-    to: Kafka
-    evidence: >-
-      Neither service configures Kafka (no spring.kafka, no @KafkaListener);
-      they publish and consume no events yet, so they get no MSK egress.

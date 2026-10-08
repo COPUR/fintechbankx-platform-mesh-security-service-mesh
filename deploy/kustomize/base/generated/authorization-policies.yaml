@@ -146,6 +146,8 @@ spec:
             paths:
               - /api/v1/compliance
               - /api/v1/compliance/*
+            notPaths:
+              - /api/v1/compliance/screen
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -221,6 +223,10 @@ spec:
             paths:
               - /api/v1/customers
               - /api/v1/customers/*
+            notPaths:
+              - /api/v1/customers/{*}/credit
+              - /api/v1/customers/{*}/credit/reserve
+              - /api/v1/customers/{*}/credit/release
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -334,7 +340,7 @@ metadata:
   name: allow-from-customer-customer-profile-kyc-service-to-keycloak
   namespace: identity
   annotations:
-    fintechbankx.io/evidence: spring.security.oauth2.resourceserver.jwt.jwk-set-uri in every service application.yml | platform contract - one confidential client per service, client-credentials
+    fintechbankx.io/evidence: "spring.security.oauth2.resourceserver.jwt.jwk-set-uri in every service application.yml | platform contract - one confidential client per service, client-credentials | Customer thread 2026-10-08 (customer PR #13): PUT /api/v1/customers/{id}/identity-link sets the user attribute customer_id through the Keycloak admin API as svc-cus-profile-kyc (realm-management manage-users, identity PR #11)."
 spec:
   selector:
     matchLabels:
@@ -366,6 +372,20 @@ spec:
               - POST
             paths:
               - /realms/fintechbankx/protocol/openid-connect/token
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/customer/sa/customer-profile-kyc-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+              - PUT
+            paths:
+              - /admin/realms/fintechbankx/users
+              - /admin/realms/fintechbankx/users/*
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -3151,6 +3171,8 @@ spec:
             paths:
               - /api/v1/risk
               - /api/v1/risk/*
+            notPaths:
+              - /api/v1/risk/assess
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy

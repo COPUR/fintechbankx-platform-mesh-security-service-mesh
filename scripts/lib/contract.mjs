@@ -117,6 +117,7 @@ export function expandEdges(contract) {
             port,
             methods: e.methods,
             paths: e.paths,
+            notPaths: e.notPaths,
             scope: e.scope,
             evidence: e.evidence,
           });

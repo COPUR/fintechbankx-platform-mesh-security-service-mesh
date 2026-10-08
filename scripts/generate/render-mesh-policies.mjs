@@ -157,6 +157,7 @@ function authorizationPolicies(contract) {
     const op = { ports: [String(e.port)] };
     if (e.methods) op.methods = e.methods;
     if (e.paths) op.paths = e.paths;
+    if (e.notPaths) op.notPaths = e.notPaths;
     g.ops.push(op);
     if (e.evidence) g.evidence.push(e.evidence);
   }
