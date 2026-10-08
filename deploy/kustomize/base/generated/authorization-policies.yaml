@@ -2712,6 +2712,28 @@ spec:
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
+  name: allow-from-payments-payment-bulk-orchestration-service-to-consent-authorization-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: confirmed by the lending and payments thread 2026-10-08 (bulk orchestration draft PR
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: consent-authorization-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-bulk-orchestration-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
   name: allow-from-payments-payment-initiation-settlement-service-to-consent-authorization-service
   namespace: open-finance
   annotations:

@@ -139,6 +139,7 @@ test('contract: east-west service edges are exactly the confirmed ones and scope
   const eastWest = expandEdges(contract).filter((e) => svcNs.has(e.from.ns) && svcNs.has(e.to.ns));
   assert.deepEqual([...new Set(eastWest.map((e) => `${e.from.ns}/${e.from.sa}->${e.to.ns}/${e.to.sa}`))].sort(), [
     'lending/loan-lifecycle-service->customer/customer-profile-kyc-service',
+    'payments/payment-bulk-orchestration-service->open-finance/consent-authorization-service',
     'payments/payment-initiation-settlement-service->compliance/compliance-evidence-service',
     'payments/payment-initiation-settlement-service->open-finance/consent-authorization-service',
     'payments/payment-initiation-settlement-service->open-finance/payee-verification-service',
@@ -193,6 +194,7 @@ test('contract: open-finance keeps its documented token exception and is still d
   assert.deepEqual([...callers].sort(), [
     'cluster.local/ns/istio-ingress/sa/istio-ingressgateway',
     'cluster.local/ns/observability/sa/prometheus',
+    'cluster.local/ns/payments/sa/payment-bulk-orchestration-service',
     'cluster.local/ns/payments/sa/payment-initiation-settlement-service',
   ]);
 });
