@@ -11,6 +11,7 @@ permissions:
 env:
   KUSTOMIZE_VERSION: v5.5.0
   KUBECONFORM_VERSION: v0.6.7
+  HELM_VERSION: v3.16.3
 
 jobs:
   render-and-validate:
@@ -36,9 +37,11 @@ jobs:
           curl -sSfL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" | tar -xz -C "$bin"
           istio_version="$(tr -d '[:space:]' < deploy/istio/ISTIO_VERSION)"
           curl -sSfL "https://github.com/istio/istio/releases/download/${istio_version}/istioctl-${istio_version}-linux-amd64.tar.gz" | tar -xz -C "$bin"
+          # Pin helm: the runner's preinstalled helm uses a newer JSON-schema
+          # validator that rejects the Istio 1.24 gateway chart's own schema.
+          curl -sSfL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar -xz -C "$bin" --strip-components=1 linux-amd64/helm
           echo "$bin" >> "$GITHUB_PATH"
-          # helm 3 is preinstalled on ubuntu-latest runners.
-          helm version --short
+          "$bin/helm" version --short
 
       - name: Unit tests and source validation
         shell: bash
