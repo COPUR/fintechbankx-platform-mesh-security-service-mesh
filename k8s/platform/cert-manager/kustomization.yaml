@@ -8,3 +8,16 @@ resources:
   - internal-ca-externalsecret.yaml
   - cluster-issuer.yaml
   - bundle-internal-ca.yaml
+  - bundle-rds-ca.yaml
+
+# Source of the RDS CA Bundle; trust-manager reads sources from its trust
+# namespace (cert-manager).
+configMapGenerator:
+  - name: amazon-rds-ca-source
+    namespace: cert-manager
+    files:
+      - global-bundle.pem=amazon-rds-global-bundle.pem
+    options:
+      disableNameSuffixHash: true
+      labels:
+        fintechbankx.io/context: platform

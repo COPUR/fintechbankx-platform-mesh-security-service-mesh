@@ -36,6 +36,15 @@ gateway:
     istio: ingressgateway
   # Container ports of the gateway Deployment (Helm chart istio/gateway 1.24.3).
   containerPorts: [80, 443]
+  # Edge rate limit for the anonymous open-data APIs (platform review
+  # 2026-10-08). Envoy local rate limit per gateway pod, keyed on nothing
+  # (one bucket per route per pod), 429 when empty. Proposed values: tune
+  # from traffic; total = per-pod rate x gateway replicas.
+  anonymousRateLimit:
+    routes: [svc-of-open-products-catalog, svc-of-atm-directory, svc-of-banking-metadata]
+    maxTokens: 100
+    tokensPerFill: 50
+    fillInterval: 1s
 
 # kind: service   -> bounded-context namespace with application workloads
 # kind: platform  -> platform namespace managed by a platform repo
@@ -64,6 +73,7 @@ namespaces:
       - serviceAccount: payment-request-to-pay-service
         serviceId: svc-pay-request-to-pay
         sourceRepo: fintechbankx-lendingpayments-payment-orchestration-request-to-pay
+        apiPrefix: [/open-finance/v1/par, /open-finance/v1/payment-consents]   # TPP-facing, DPoP (request-to-pay PR #14 e5b3592)
       - serviceAccount: payment-recurring-mandates-service
         serviceId: svc-pay-recurring-mandates
         sourceRepo: fintechbankx-lendingpayments-payment-orchestration-recurring-mandates
@@ -352,7 +362,8 @@ edges:
     paths: [/api/v1/customers, /api/v1/customers/*]
     # Service-only credit operations stay off the public gateway (review
     # finding, customer thread 2026-10-08): only loan-lifecycle calls them.
-    notPaths: ["/api/v1/customers/{*}/credit", "/api/v1/customers/{*}/credit/reserve", "/api/v1/customers/{*}/credit/release"]
+    # GET /credit stays public (CUSTOMER self-read, BANKER, ADMIN; customer thread 2026-10-08).
+    notPaths: ["/api/v1/customers/{*}/credit/reserve", "/api/v1/customers/{*}/credit/release"]
     evidence: customer-infrastructure CustomerController @RequestMapping("/api/v1/customers")
   - from: istio-ingress/istio-ingressgateway
     to: risk/risk-decisioning-service
@@ -425,6 +436,11 @@ edges:
     port: 8080
     paths: [/open-finance/v1/vrp/payment-consents, /open-finance/v1/vrp/payment-consents/*, /open-finance/v1/vrp/payments, /open-finance/v1/vrp/payments/*]
     evidence: recurring-mandates PR #13 f8bc1b0 @RequestMapping("/open-finance/v1/vrp"); TPP-facing, DPoP, aud svc-pay-recurring-mandates
+  - from: istio-ingress/istio-ingressgateway
+    to: payments/payment-request-to-pay-service
+    port: 8080
+    paths: [/open-finance/v1/par, "/open-finance/v1/payment-consents/{*}", "/open-finance/v1/payment-consents/{*}/accept", "/open-finance/v1/payment-consents/{*}/reject"]
+    evidence: request-to-pay PR #14 e5b3592 @RequestMapping("/open-finance/v1") POST /par, GET /payment-consents/{id}, POST /payment-consents/{id}/accept|reject; TPP-facing, DPoP, aud svc-pay-request-to-pay
   - from: istio-ingress/istio-ingressgateway
     to: payments/payment-bulk-orchestration-service
     port: 8080
@@ -758,10 +774,3 @@ gaps:
     evidence: >-
       Edges confirmed by the service threads but no adapter exists yet; the
       ALLOW rules are port-only (8080) until methods and paths are known.
-  - from: payments/payment-request-to-pay-service
-    to: ingress gateway route
-    evidence: >-
-      Request-to-pay's gateway route (/api/v1/pay-requests on main) waits for
-      its owner to confirm it. Mandates (/open-finance/v1/vrp) and bulk
-      (/open-finance/v1/file-payments) are routed since their PR #13 heads
-      dropped the copies of open-finance routes.

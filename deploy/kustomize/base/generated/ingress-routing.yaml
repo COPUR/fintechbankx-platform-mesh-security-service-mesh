@@ -83,6 +83,26 @@ spec:
           remove:
             - forwarded
             - x-forwarded-prefix
+    - name: svc-pay-request-to-pay
+      match:
+        - uri:
+            prefix: /open-finance/v1/par
+        - uri:
+            prefix: /open-finance/v1/payment-consents
+      route:
+        - destination:
+            host: payment-request-to-pay-service.payments.svc.cluster.local
+            port:
+              number: 8080
+      headers:
+        request:
+          set:
+            x-forwarded-proto: https
+            x-forwarded-host: API_HOST
+            x-forwarded-port: "443"
+          remove:
+            - forwarded
+            - x-forwarded-prefix
     - name: svc-pay-recurring-mandates
       match:
         - uri:
@@ -303,6 +323,132 @@ spec:
           remove:
             - forwarded
             - x-forwarded-prefix
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: anonymous-open-data-rate-limit
+  namespace: istio-ingress
+spec:
+  workloadSelector:
+    labels:
+      istio: ingressgateway
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.local_ratelimit
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+            stat_prefix: http_local_rate_limiter
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          vhost:
+            route:
+              name: svc-of-open-products-catalog
+      patch:
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            envoy.filters.http.local_ratelimit:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+              stat_prefix: anonymous_open_data
+              token_bucket:
+                max_tokens: 100
+                tokens_per_fill: 50
+                fill_interval: 1s
+              filter_enabled:
+                runtime_key: anonymous_open_data_enabled
+                default_value:
+                  numerator: 100
+                  denominator: HUNDRED
+              filter_enforced:
+                runtime_key: anonymous_open_data_enforced
+                default_value:
+                  numerator: 100
+                  denominator: HUNDRED
+              response_headers_to_add:
+                - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                  header:
+                    key: x-fbx-rate-limited
+                    value: "true"
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          vhost:
+            route:
+              name: svc-of-atm-directory
+      patch:
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            envoy.filters.http.local_ratelimit:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+              stat_prefix: anonymous_open_data
+              token_bucket:
+                max_tokens: 100
+                tokens_per_fill: 50
+                fill_interval: 1s
+              filter_enabled:
+                runtime_key: anonymous_open_data_enabled
+                default_value:
+                  numerator: 100
+                  denominator: HUNDRED
+              filter_enforced:
+                runtime_key: anonymous_open_data_enforced
+                default_value:
+                  numerator: 100
+                  denominator: HUNDRED
+              response_headers_to_add:
+                - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                  header:
+                    key: x-fbx-rate-limited
+                    value: "true"
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          vhost:
+            route:
+              name: svc-of-banking-metadata
+      patch:
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            envoy.filters.http.local_ratelimit:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+              stat_prefix: anonymous_open_data
+              token_bucket:
+                max_tokens: 100
+                tokens_per_fill: 50
+                fill_interval: 1s
+              filter_enabled:
+                runtime_key: anonymous_open_data_enabled
+                default_value:
+                  numerator: 100
+                  denominator: HUNDRED
+              filter_enforced:
+                runtime_key: anonymous_open_data_enforced
+                default_value:
+                  numerator: 100
+                  denominator: HUNDRED
+              response_headers_to_add:
+                - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                  header:
+                    key: x-fbx-rate-limited
+                    value: "true"
 ---
 apiVersion: networking.istio.io/v1
 kind: VirtualService

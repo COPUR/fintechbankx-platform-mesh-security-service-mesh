@@ -268,7 +268,6 @@ test('gateway: service-only operations are not reachable from the ingress gatewa
       .find((d) => d.doc.kind === 'AuthorizationPolicy' && d.doc.metadata.namespace === ns && d.doc.metadata.name === name)
       .doc.spec.rules.map((r) => r.to[0].operation);
   assert.deepEqual(gwOps('customer', 'allow-from-istio-ingress-istio-ingressgateway-to-customer-profile-kyc-service')[0].notPaths, [
-    '/api/v1/customers/{*}/credit',
     '/api/v1/customers/{*}/credit/reserve',
     '/api/v1/customers/{*}/credit/release',
   ]);
@@ -294,4 +293,21 @@ test('gateway: TPP payment APIs and the consent authorization flow are routed an
   assert.ok(!consent.includes('/api/v1/consents/*'), 'service view GET /api/v1/consents/{id} stays in-cluster');
   assert.ok(paths('payments', 'allow-from-istio-ingress-istio-ingressgateway-to-payment-recurring-mandates-service').includes('/open-finance/v1/vrp/payments/*'));
   assert.ok(paths('payments', 'allow-from-istio-ingress-istio-ingressgateway-to-payment-bulk-orchestration-service').includes('/open-finance/v1/file-payments/*'));
+});
+
+test('gateway: request-to-pay TPP paths, open-data rate limit and the RDS CA bundle', () => {
+  const docs = deployable();
+  const api = docs.find((d) => d.doc.kind === 'VirtualService' && d.doc.metadata.name === 'fintechbankx-api').doc;
+  assert.deepEqual(
+    api.spec.http.find((r) => r.name === 'svc-pay-request-to-pay').match.map((m) => m.uri.prefix),
+    ['/open-finance/v1/par', '/open-finance/v1/payment-consents'],
+  );
+  const ef = docs.find((d) => d.doc.kind === 'EnvoyFilter' && d.doc.metadata.name === 'anonymous-open-data-rate-limit').doc;
+  const limited = ef.spec.configPatches.filter((p) => p.applyTo === 'HTTP_ROUTE').map((p) => p.match.routeConfiguration.vhost.route.name);
+  assert.deepEqual(limited, ['svc-of-open-products-catalog', 'svc-of-atm-directory', 'svc-of-banking-metadata']);
+  const routeNames = new Set(api.spec.http.map((r) => r.name));
+  for (const r of limited) assert.ok(routeNames.has(r), `rate-limited route ${r} exists on the gateway`);
+  const bundle = docs.find((d) => d.doc.kind === 'Bundle' && d.doc.metadata.name === 'rds-ca-bundle').doc;
+  assert.equal(bundle.spec.target.configMap.key, 'global-bundle.pem');
+  assert.deepEqual(bundle.spec.sources, [{ configMap: { name: 'amazon-rds-ca-source', key: 'global-bundle.pem' } }]);
 });

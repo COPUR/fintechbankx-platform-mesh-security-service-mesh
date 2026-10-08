@@ -5281,6 +5281,12 @@ spec:
               kubernetes.io/metadata.name: payments
           podSelector:
             matchLabels:
+              app.kubernetes.io/name: payment-request-to-pay-service
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: payments
+          podSelector:
+            matchLabels:
               app.kubernetes.io/name: payment-bulk-orchestration-service
       ports:
         - protocol: TCP

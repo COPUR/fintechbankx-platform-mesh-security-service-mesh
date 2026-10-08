@@ -224,7 +224,6 @@ spec:
               - /api/v1/customers
               - /api/v1/customers/*
             notPaths:
-              - /api/v1/customers/{*}/credit
               - /api/v1/customers/{*}/credit/reserve
               - /api/v1/customers/{*}/credit/release
 ---
@@ -3198,6 +3197,33 @@ spec:
               - /actuator/prometheus
               - /actuator/health
               - /actuator/health/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-istio-ingress-istio-ingressgateway-to-payment-request-to-pay-service
+  namespace: payments
+  annotations:
+    fintechbankx.io/evidence: request-to-pay PR
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payment-request-to-pay-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            paths:
+              - /open-finance/v1/par
+              - /open-finance/v1/payment-consents/{*}
+              - /open-finance/v1/payment-consents/{*}/accept
+              - /open-finance/v1/payment-consents/{*}/reject
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy

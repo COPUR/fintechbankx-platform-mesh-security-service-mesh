@@ -192,3 +192,14 @@ see the workloads, so it does not prove the selectors match running pods.
 - Legacy `k8s/istio/security/mtls-policies.yaml` has a PeerAuthentication with
   `mode: SIMPLE` under `portLevelMtls`, which is not a PeerAuthentication mode.
   Left untouched as legacy; it is not part of the deployable set.
+
+## Edge rate limit and database CA (2026-10-08)
+
+- Anonymous open-data routes (`svc-of-open-products-catalog`, `svc-of-atm-directory`, `svc-of-banking-metadata`) get an
+  Envoy local rate limit on the ingress gateway (EnvoyFilter `anonymous-open-data-rate-limit`, generated from
+  `gateway.anonymousRateLimit` in the contract): 100-token bucket refilled with 50 per second, per route and per gateway
+  pod; an empty bucket returns 429 with `x-fbx-rate-limited: true`. Proposed values; tune from traffic.
+- Amazon RDS / DocumentDB CA: trust-manager Bundle `rds-ca-bundle` publishes ConfigMap `rds-ca-bundle`, key
+  `global-bundle.pem`, into every `service` and `platform` namespace. Its source is
+  `k8s/platform/cert-manager/amazon-rds-global-bundle.pem`, a copy of
+  `https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`; refresh it when AWS announces a CA rotation.

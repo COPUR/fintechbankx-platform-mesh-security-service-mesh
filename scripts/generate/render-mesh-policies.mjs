@@ -422,6 +422,58 @@ const forwardedHeaders = (host) => ({
   },
 });
 
+// Envoy local rate limit on the gateway for the anonymous open-data routes.
+// The HTTP filter is inserted without a bucket (pass-through); each listed
+// route (Envoy route name = VirtualService http route name) gets its own
+// token bucket and returns 429 with x-fbx-rate-limited when it is empty.
+function anonymousRateLimit(contract) {
+  const rl = contract.gateway.anonymousRateLimit;
+  if (!rl) return [];
+  const known = new Set(serviceWorkloads(contract).filter((w) => w.apiPrefix).map((w) => w.serviceId));
+  for (const r of rl.routes) if (!known.has(r)) throw new Error(`anonymousRateLimit: ${r} is not a gateway route`);
+  const TYPE = 'type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit';
+  const pct = (on) => ({ default_value: { numerator: on ? 100 : 0, denominator: 'HUNDRED' } });
+  return [
+    {
+      apiVersion: 'networking.istio.io/v1alpha3',
+      kind: 'EnvoyFilter',
+      metadata: { name: 'anonymous-open-data-rate-limit', namespace: contract.gateway.namespace },
+      spec: {
+        workloadSelector: { labels: contract.gateway.selector },
+        configPatches: [
+          {
+            applyTo: 'HTTP_FILTER',
+            match: { context: 'GATEWAY', listener: { filterChain: { filter: { name: 'envoy.filters.network.http_connection_manager', subFilter: { name: 'envoy.filters.http.router' } } } } },
+            patch: {
+              operation: 'INSERT_BEFORE',
+              value: { name: 'envoy.filters.http.local_ratelimit', typed_config: { '@type': TYPE, stat_prefix: 'http_local_rate_limiter' } },
+            },
+          },
+          ...rl.routes.map((route) => ({
+            applyTo: 'HTTP_ROUTE',
+            match: { context: 'GATEWAY', routeConfiguration: { vhost: { route: { name: route } } } },
+            patch: {
+              operation: 'MERGE',
+              value: {
+                typed_per_filter_config: {
+                  'envoy.filters.http.local_ratelimit': {
+                    '@type': TYPE,
+                    stat_prefix: 'anonymous_open_data',
+                    token_bucket: { max_tokens: rl.maxTokens, tokens_per_fill: rl.tokensPerFill, fill_interval: rl.fillInterval },
+                    filter_enabled: { runtime_key: 'anonymous_open_data_enabled', ...pct(true) },
+                    filter_enforced: { runtime_key: 'anonymous_open_data_enforced', ...pct(true) },
+                    response_headers_to_add: [{ append_action: 'OVERWRITE_IF_EXISTS_OR_ADD', header: { key: 'x-fbx-rate-limited', value: 'true' } }],
+                  },
+                },
+              },
+            },
+          })),
+        ],
+      },
+    },
+  ];
+}
+
 function ingressRouting(contract) {
   const gw = contract.gateway;
   const routes = serviceWorkloads(contract)
@@ -473,6 +525,7 @@ function ingressRouting(contract) {
         http: routes,
       },
     },
+    ...anonymousRateLimit(contract),
     {
       apiVersion: NET,
       kind: 'VirtualService',
