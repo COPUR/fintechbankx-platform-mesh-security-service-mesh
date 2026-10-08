@@ -2843,28 +2843,6 @@ spec:
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
-  name: allow-from-payments-payment-initiation-settlement-service-to-consent-authorization-service
-  namespace: open-finance
-  annotations:
-    fintechbankx.io/evidence: confirmed by service thread 2026-10-08; adapter not yet on claude/project-thread-ty79y4
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: consent-authorization-service
-  action: ALLOW
-  rules:
-    - from:
-        - source:
-            principals:
-              - cluster.local/ns/payments/sa/payment-initiation-settlement-service
-      to:
-        - operation:
-            ports:
-              - "8080"
----
-apiVersion: security.istio.io/v1
-kind: AuthorizationPolicy
-metadata:
   name: allow-from-payments-payment-recurring-mandates-service-to-consent-authorization-service
   namespace: open-finance
   annotations:

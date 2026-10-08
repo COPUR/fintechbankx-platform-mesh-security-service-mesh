@@ -398,7 +398,10 @@ spec:
       - key: app.kubernetes.io/name
         operator: In
         values:
+          - payment-bulk-orchestration-service
           - payment-initiation-settlement-service
+          - payment-recurring-mandates-service
+          - payment-request-to-pay-service
   policyTypes:
     - Egress
   egress:
@@ -420,7 +423,10 @@ spec:
       - key: app.kubernetes.io/name
         operator: In
         values:
+          - payment-bulk-orchestration-service
           - payment-initiation-settlement-service
+          - payment-recurring-mandates-service
+          - payment-request-to-pay-service
   policyTypes:
     - Egress
   egress:
@@ -578,13 +584,13 @@ spec:
               kubernetes.io/metadata.name: open-finance
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: consent-authorization-service
+              app.kubernetes.io/name: payee-verification-service
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: open-finance
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: payee-verification-service
+              app.kubernetes.io/name: consent-authorization-service
       ports:
         - protocol: TCP
           port: 8080

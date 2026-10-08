@@ -149,7 +149,6 @@ test('contract: east-west service edges are exactly the confirmed ones and scope
     'payments/payment-bulk-orchestration-service->open-finance/consent-authorization-service',
     'payments/payment-initiation-settlement-service->compliance/compliance-evidence-service',
     'payments/payment-initiation-settlement-service->customer/customer-profile-kyc-service',
-    'payments/payment-initiation-settlement-service->open-finance/consent-authorization-service',
     'payments/payment-initiation-settlement-service->open-finance/payee-verification-service',
     'payments/payment-initiation-settlement-service->risk/risk-decisioning-service',
     'payments/payment-recurring-mandates-service->open-finance/consent-authorization-service',
@@ -180,9 +179,12 @@ test('contract: datastore egress is scoped to the workloads that declare the sto
     'banking-metadata-service', 'business-financial-data-service', 'consent-authorization-service',
     'payee-verification-service', 'personal-financial-data-service',
   ]);
-  // Unconfirmed payment workloads get no datastore egress.
+  // Every payment workload owns an Aurora database and an outbox relay to MSK.
   for (const name of ['allow-egress-aurora', 'allow-egress-msk']) {
-    assert.deepEqual(selected(np('payments', name)), ['payment-initiation-settlement-service']);
+    assert.deepEqual(selected(np('payments', name)), [
+      'payment-bulk-orchestration-service', 'payment-initiation-settlement-service',
+      'payment-recurring-mandates-service', 'payment-request-to-pay-service',
+    ]);
   }
   for (const ns of ['lending', 'payments', 'customer', 'risk', 'compliance']) {
     assert.equal(np(ns, 'allow-egress-documentdb'), undefined);
@@ -353,6 +355,17 @@ test('consent: the in-cluster GET /api/v1/consents/{id} view is open to bulk and
     'cluster.local/ns/payments/sa/payment-bulk-orchestration-service',
     'cluster.local/ns/payments/sa/payment-recurring-mandates-service',
   ]);
+});
+
+test('consent: every rule into consent-auth names its paths (no port-only access to /internal/v1)', () => {
+  const docs = deployable();
+  const rules = docs
+    .filter((d) => d.doc.kind === 'AuthorizationPolicy' && d.doc.metadata.namespace === 'open-finance' && /-to-consent-authorization-service$/.test(d.doc.metadata.name))
+    .flatMap((d) => d.doc.spec.rules);
+  assert.ok(rules.length > 0);
+  for (const r of rules) {
+    assert.ok(r.to?.every((t) => (t.operation.paths || []).length > 0), JSON.stringify(r.from));
+  }
 });
 
 // ------------------------------------------------------------------ secrets (R10)

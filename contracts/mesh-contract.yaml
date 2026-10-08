@@ -67,21 +67,25 @@ namespaces:
         sourceRepo: fintechbankx-lendingpayments-payment-orchestration-initiation-settlement
         apiPrefix: /api/v1/payments
         datastores: [aurora-postgresql, msk]
-      # Service accounts confirmed by the payment service threads (2026-10-08).
-      # No ingress route, datastore or call edge is confirmed yet, so they get
-      # only the platform edges (identity, telemetry, scraping).
+      # Request-to-pay, recurring mandates and bulk orchestration: each has its
+      # own Aurora PostgreSQL database and publishes through an outbox relay to
+      # MSK (evt.pay.rtp / evt.pay.mandate / evt.pay.bulk); review of RtP #14
+      # found the pods had no datastore egress (2026-10-08).
       - serviceAccount: payment-request-to-pay-service
         serviceId: svc-pay-request-to-pay
         sourceRepo: fintechbankx-lendingpayments-payment-orchestration-request-to-pay
         apiPrefix: [/open-finance/v1/par, /open-finance/v1/payment-consents]   # TPP-facing, DPoP (request-to-pay PR #14 e5b3592)
+        datastores: [aurora-postgresql, msk]
       - serviceAccount: payment-recurring-mandates-service
         serviceId: svc-pay-recurring-mandates
         sourceRepo: fintechbankx-lendingpayments-payment-orchestration-recurring-mandates
         apiPrefix: /open-finance/v1/vrp   # TPP-facing, DPoP enforced by the service (contract DPoP section)
+        datastores: [aurora-postgresql, msk]
       - serviceAccount: payment-bulk-orchestration-service
         serviceId: svc-pay-bulk-orchestration
         sourceRepo: fintechbankx-lendingpayments-payment-orchestration-bulk-orchestration
         apiPrefix: /open-finance/v1/file-payments   # TPP-facing, DPoP enforced by the service (contract DPoP section)
+        datastores: [aurora-postgresql, msk]
   - name: customer
     context: customer
     kind: service
@@ -539,11 +543,10 @@ edges:
 
   # payments -> open finance consent and payee verification: confirmed by the
   # service threads (2026-10-08); no adapter on the payment branch yet.
-  - from: payments/payment-initiation-settlement-service
-    to: open-finance/consent-authorization-service
-    port: 8080
-    scope: port-only
-    evidence: confirmed by service thread 2026-10-08; adapter not yet on claude/project-thread-ty79y4
+  # payment-initiation-settlement-service has no consent edge: it does not call
+  # consent-auth (open finance and lending threads, 2026-10-08), and a
+  # port-only rule would reach /internal/v1 and /oauth2/token (review of mesh
+  # 2522b49). Add a (method, path) edge with evidence if an adapter appears.
   - from: payments/payment-initiation-settlement-service
     to: open-finance/payee-verification-service
     port: 8080
