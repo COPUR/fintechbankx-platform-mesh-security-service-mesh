@@ -92,6 +92,69 @@ spec:
             host: compliance-evidence-service.compliance.svc.cluster.local
             port:
               number: 8080
+    - name: svc-of-consent-authorization
+      match:
+        - uri:
+            prefix: /open-finance/v1/consents
+      route:
+        - destination:
+            host: consent-authorization-service.open-finance.svc.cluster.local
+            port:
+              number: 8080
+    - name: svc-of-payee-verification
+      match:
+        - uri:
+            prefix: /open-finance/v1/confirmation-of-payee
+      route:
+        - destination:
+            host: payee-verification-service.open-finance.svc.cluster.local
+            port:
+              number: 8080
+    - name: svc-of-personal-financial-data
+      match:
+        - uri:
+            prefix: /open-finance/v1/accounts
+      route:
+        - destination:
+            host: personal-financial-data-service.open-finance.svc.cluster.local
+            port:
+              number: 8080
+    - name: svc-of-business-financial-data
+      match:
+        - uri:
+            prefix: /open-finance/v1/corporate
+      route:
+        - destination:
+            host: business-financial-data-service.open-finance.svc.cluster.local
+            port:
+              number: 8080
+    - name: svc-of-banking-metadata
+      match:
+        - uri:
+            prefix: /open-finance/v1/metadata
+      route:
+        - destination:
+            host: banking-metadata-service.open-finance.svc.cluster.local
+            port:
+              number: 8080
+    - name: svc-of-atm-directory
+      match:
+        - uri:
+            prefix: /open-finance/v1/atms
+      route:
+        - destination:
+            host: atm-directory-service.open-finance.svc.cluster.local
+            port:
+              number: 8080
+    - name: svc-of-open-products-catalog
+      match:
+        - uri:
+            prefix: /open-finance/v1/products
+      route:
+        - destination:
+            host: open-products-catalog-service.open-finance.svc.cluster.local
+            port:
+              number: 8080
 ---
 apiVersion: networking.istio.io/v1
 kind: VirtualService

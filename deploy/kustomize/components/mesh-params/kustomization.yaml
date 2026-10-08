@@ -41,6 +41,18 @@ replacements:
     targets:
       - select: {kind: NetworkPolicy, name: allow-egress-msk}
         fieldPaths: [spec.egress.0.to.0.ipBlock.cidr]
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.DOCDB_CIDR}
+    targets:
+      - select: {kind: NetworkPolicy, name: allow-egress-documentdb}
+        fieldPaths: [spec.egress.0.to.0.ipBlock.cidr]
+      - select: {kind: ServiceEntry, name: documentdb}
+        fieldPaths: [spec.addresses.0]
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.REDIS_CIDR}
+    targets:
+      - select: {kind: NetworkPolicy, name: allow-egress-redis}
+        fieldPaths: [spec.egress.0.to.0.ipBlock.cidr]
+      - select: {kind: ServiceEntry, name: elasticache-redis}
+        fieldPaths: [spec.addresses.0]
   - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.INGRESS_SOURCE_CIDR}
     targets:
       - select: {kind: NetworkPolicy, name: allow-ingress-load-balancer}

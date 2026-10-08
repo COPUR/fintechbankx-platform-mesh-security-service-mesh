@@ -58,8 +58,18 @@ namespaces:
         sourceRepo: fintechbankx-lendingpayments-payment-orchestration-initiation-settlement
         apiPrefix: /api/v1/payments
         datastores: [aurora-postgresql, msk]
-    # svc-pay-recurring-mandates, svc-pay-bulk-orchestration and
-    # svc-pay-request-to-pay have no deployable chart or service account yet.
+      # Service accounts confirmed by the payment service threads (2026-10-08).
+      # No ingress route, datastore or call edge is confirmed yet, so they get
+      # only the platform edges (identity, telemetry, scraping).
+      - serviceAccount: payment-request-to-pay-service
+        serviceId: svc-pay-request-to-pay
+        sourceRepo: fintechbankx-lendingpayments-payment-orchestration-request-to-pay
+      - serviceAccount: payment-recurring-mandates-service
+        serviceId: svc-pay-recurring-mandates
+        sourceRepo: fintechbankx-lendingpayments-payment-orchestration-recurring-mandates
+      - serviceAccount: payment-bulk-orchestration-service
+        serviceId: svc-pay-bulk-orchestration
+        sourceRepo: fintechbankx-lendingpayments-payment-orchestration-bulk-orchestration
   - name: customer
     context: customer
     kind: service
@@ -90,10 +100,46 @@ namespaces:
   - name: open-finance
     context: open-finance
     kind: service
-    # The openfinance-* charts are placeholders (image openfinance/microservice
-    # with tag latest, no service account, no management port), so no allow
-    # rule can name a workload yet. The namespace stays default-deny.
-    workloads: []
+    # Service accounts and datastores confirmed by the open-finance service
+    # threads (2026-10-08). API prefixes from the controllers on branch
+    # claude/project-thread-nfwa8t. Tokens are validated by the services
+    # themselves (DPoP/FAPI), see exceptions.requestAuthentication.
+    workloads:
+      - serviceAccount: consent-authorization-service
+        serviceId: svc-of-consent-authorization
+        sourceRepo: fintechbankx-openfinance-consent-auth-service
+        apiPrefix: /open-finance/v1/consents
+        datastores: [aurora-postgresql, msk]
+      - serviceAccount: payee-verification-service
+        serviceId: svc-of-payee-verification
+        sourceRepo: fintechbankx-openfinance-payee-metadata-payee-verification
+        apiPrefix: /open-finance/v1/confirmation-of-payee
+        datastores: [aurora-postgresql, msk]
+      - serviceAccount: personal-financial-data-service
+        serviceId: svc-of-personal-financial-data
+        sourceRepo: fintechbankx-openfinance-retail-data-personal-financial
+        apiPrefix: /open-finance/v1/accounts
+        datastores: [documentdb, elasticache-redis, msk]
+      - serviceAccount: business-financial-data-service
+        serviceId: svc-of-business-financial-data
+        sourceRepo: fintechbankx-openfinance-corporate-data-business-financial
+        apiPrefix: /open-finance/v1/corporate
+        datastores: [documentdb, elasticache-redis, msk]
+      - serviceAccount: banking-metadata-service
+        serviceId: svc-of-banking-metadata
+        sourceRepo: fintechbankx-openfinance-payee-metadata-banking-metadata
+        apiPrefix: /open-finance/v1/metadata
+        datastores: [documentdb, elasticache-redis, msk]
+      - serviceAccount: atm-directory-service
+        serviceId: svc-of-atm-directory
+        sourceRepo: fintechbankx-openfinance-open-data-atm-directory
+        apiPrefix: /open-finance/v1/atms
+        datastores: [aurora-postgresql]
+      - serviceAccount: open-products-catalog-service
+        serviceId: svc-of-open-products-catalog
+        sourceRepo: fintechbankx-openfinance-open-data-products-catalog
+        apiPrefix: /open-finance/v1/products
+        datastores: [aurora-postgresql]
   - name: identity
     context: identity
     kind: platform
@@ -150,10 +196,15 @@ exceptions:
   requestAuthentication:
     - namespace: open-finance
       reason: >-
-        openfinance-* services issue and verify their own HMAC/DPoP tokens
-        (OPENFINANCE_*_JWT_SECRET, dpop-required) instead of Keycloak; a
-        Keycloak-only RequestAuthentication would reject them. Namespace is
-        default-deny until the services move to the Keycloak issuer.
+        Open-finance services validate their own FAPI/DPoP tokens: the issuer
+        is per-service configuration (OPENFINANCE_*_JWT_ISSUER, empty by
+        default; consent-auth issues openfinance-internal-auth tokens), tokens
+        arrive as "Authorization: DPoP" or "Bearer", and the open-data APIs
+        (ATMs, products) are public. A Keycloak-issuer RequestAuthentication
+        with aud = service id would reject valid TPP calls, so the namespace
+        relies on default-deny plus per-principal ALLOW rules and the
+        services' own token checks. Revisit once the issuer is fixed in the
+        platform contract.
   networkPolicyDefaultDeny:
     - namespace: istio-system
       reason: istiod webhooks are called from EKS control-plane ENIs; not yet drilled.
@@ -225,6 +276,56 @@ edges:
     scope: port-only
     evidence: confirmed by service thread 2026-10-08; adapter not yet on claude/project-thread-ty79y4
 
+  # North-south: ingress gateway -> open-finance APIs (service-side DPoP/FAPI).
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/consent-authorization-service
+    port: 8080
+    paths: [/open-finance/v1/consents, /open-finance/v1/consents/*]
+    evidence: confirmed by service thread 2026-10-08; ConsentController /open-finance/v1/consents
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/payee-verification-service
+    port: 8080
+    paths: [/open-finance/v1/confirmation-of-payee, /open-finance/v1/confirmation-of-payee/*]
+    evidence: confirmed by service thread 2026-10-08; @RequestMapping("/open-finance/v1/confirmation-of-payee")
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/personal-financial-data-service
+    port: 8080
+    paths: [/open-finance/v1/accounts, /open-finance/v1/accounts/*]
+    evidence: confirmed by service thread 2026-10-08; /open-finance/v1/accounts
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/business-financial-data-service
+    port: 8080
+    paths: [/open-finance/v1/corporate/*]
+    evidence: confirmed by service thread 2026-10-08; /open-finance/v1/corporate/{accounts,transactions}
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/banking-metadata-service
+    port: 8080
+    paths: [/open-finance/v1/metadata/*]
+    evidence: confirmed by service thread 2026-10-08; /open-finance/v1/metadata/...
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/atm-directory-service
+    port: 8080
+    paths: [/open-finance/v1/atms, /open-finance/v1/atms/*]
+    evidence: confirmed by service thread 2026-10-08; /open-finance/v1/atms
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/open-products-catalog-service
+    port: 8080
+    paths: [/open-finance/v1/products, /open-finance/v1/products/*]
+    evidence: confirmed by service thread 2026-10-08; /open-finance/v1/products
+
+  # payments -> open finance consent and payee verification: confirmed by the
+  # service threads (2026-10-08); no adapter on the payment branch yet.
+  - from: payments/payment-initiation-settlement-service
+    to: open-finance/consent-authorization-service
+    port: 8080
+    scope: port-only
+    evidence: confirmed by service thread 2026-10-08; adapter not yet on claude/project-thread-ty79y4
+  - from: payments/payment-initiation-settlement-service
+    to: open-finance/payee-verification-service
+    port: 8080
+    scope: port-only
+    evidence: confirmed by service thread 2026-10-08; adapter not yet on claude/project-thread-ty79y4
+
   # Every Spring resource server fetches the realm JWKS (OIDC_JWK_SET_URI);
   # client-credentials token exchange per platform contract.
   - from: "*/service-workloads"
@@ -274,6 +375,14 @@ externalDependencies:
     port: 5432
     protocol: TCP
     cidrParam: AURORA_CIDR
+  documentdb:
+    port: 27017
+    protocol: TCP
+    cidrParam: DOCDB_CIDR
+  elasticache-redis:
+    port: 6379
+    protocol: TCP
+    cidrParam: REDIS_CIDR
   msk:
     hosts: ["*.kafka.me-central-1.amazonaws.com"]
     ports: [9098, 9094]
@@ -303,17 +412,19 @@ gaps:
       values ACCOUNTS_SERVICE_BASE_URL is empty. No core-banking repo,
       namespace or service account exists, so no policy allows it; with
       ACCOUNTS_ADAPTER=http the service fails closed.
-  - from: open-finance/*
-    to: MongoDB and Redis
-    evidence: >-
-      openfinance-* application.yml use OPENFINANCE_*_MONGODB_URI and
-      OPENFINANCE_*_REDIS_URL; no DocumentDB/ElastiCache endpoint or CIDR is
-      defined in the platform contract, so no ServiceEntry or egress rule exists.
   - from: payments/payment-initiation-settlement-service
-    to: risk/risk-decisioning-service, compliance/compliance-evidence-service (paths)
+    to: risk, compliance, open-finance consent and payee verification (paths)
     evidence: >-
-      Edge confirmed by the service threads but no adapter exists yet; the
-      ALLOW rule is port-only (8080) until methods and paths are known.
+      Edges confirmed by the service threads but no adapter exists yet; the
+      ALLOW rules are port-only (8080) until methods and paths are known.
+  - from: payments request-to-pay, recurring-mandates, bulk-orchestration
+    to: ingress routes, datastores, call edges
+    evidence: >-
+      Only the service accounts are confirmed; they get identity, telemetry
+      and scraping edges. Their controllers (main) expose /api/v1/pay-requests,
+      /open-finance/v1/vrp, /open-finance/v1/file-payments and copies of
+      /open-finance/v1/{accounts,consents,loans}, which overlap open-finance
+      routes, so no gateway route is added until the owners confirm them.
   - from: risk/risk-decisioning-service, compliance/compliance-evidence-service
     to: Kafka
     evidence: >-

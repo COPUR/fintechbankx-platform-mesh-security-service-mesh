@@ -23,6 +23,44 @@ spec:
 apiVersion: networking.istio.io/v1
 kind: ServiceEntry
 metadata:
+  name: documentdb
+  namespace: istio-system
+spec:
+  exportTo:
+    - "*"
+  location: MESH_EXTERNAL
+  hosts:
+    - documentdb.fintechbankx.internal
+  addresses:
+    - 192.0.2.0/24
+  ports:
+    - number: 27017
+      name: tcp-mongo
+      protocol: TCP
+  resolution: NONE
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: elasticache-redis
+  namespace: istio-system
+spec:
+  exportTo:
+    - "*"
+  location: MESH_EXTERNAL
+  hosts:
+    - elasticache-redis.fintechbankx.internal
+  addresses:
+    - 192.0.2.0/24
+  ports:
+    - number: 6379
+      name: tcp-redis
+      protocol: TCP
+  resolution: NONE
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
   name: msk-brokers
   namespace: istio-system
 spec:

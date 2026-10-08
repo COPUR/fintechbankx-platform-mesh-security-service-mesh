@@ -317,6 +317,20 @@ function serviceEntries(contract) {
       ports: [{ number: x['aurora-postgresql'].port, name: 'tcp-postgres', protocol: 'TCP' }],
       resolution: 'NONE',
     }),
+    // DocumentDB and ElastiCache negotiate TLS without a usable SNI host here
+    // (clients connect by cluster endpoint), so match by address like Aurora.
+    se('documentdb', {
+      hosts: ['documentdb.fintechbankx.internal'],
+      addresses: [PLACEHOLDER_CIDR],
+      ports: [{ number: x.documentdb.port, name: 'tcp-mongo', protocol: 'TCP' }],
+      resolution: 'NONE',
+    }),
+    se('elasticache-redis', {
+      hosts: ['elasticache-redis.fintechbankx.internal'],
+      addresses: [PLACEHOLDER_CIDR],
+      ports: [{ number: x['elasticache-redis'].port, name: 'tcp-redis', protocol: 'TCP' }],
+      resolution: 'NONE',
+    }),
     se('msk-brokers', {
       hosts: x.msk.hosts,
       ports: x.msk.ports.map((p) => ({ number: p, name: `tls-msk-${p}`, protocol: 'TLS' })),
@@ -521,23 +535,21 @@ function networkPolicies(contract) {
       );
     }
 
-    // Datastores.
-    const stores = new Set((n.workloads || []).flatMap((w) => w.datastores || []));
-    if (stores.has('aurora-postgresql')) {
+    // Datastores: egress only for the workloads that declare the store.
+    const storePorts = {
+      'aurora-postgresql': ['allow-egress-aurora', [contract.externalDependencies['aurora-postgresql'].port]],
+      msk: ['allow-egress-msk', contract.externalDependencies.msk.ports],
+      documentdb: ['allow-egress-documentdb', [contract.externalDependencies.documentdb.port]],
+      'elasticache-redis': ['allow-egress-redis', [contract.externalDependencies['elasticache-redis'].port]],
+    };
+    for (const [store, [name, ports]] of Object.entries(storePorts)) {
+      const users = (n.workloads || []).filter((w) => (w.datastores || []).includes(store)).map((w) => w.serviceAccount);
+      if (!users.length) continue;
       docs.push(
-        np(ns, 'allow-egress-aurora', {
-          podSelector: {},
+        np(ns, name, {
+          podSelector: { matchExpressions: [{ key: 'app.kubernetes.io/name', operator: 'In', values: users.sort() }] },
           policyTypes: ['Egress'],
-          egress: [{ to: [{ ipBlock: { cidr: PLACEHOLDER_CIDR } }], ports: tcp([5432]) }],
-        }),
-      );
-    }
-    if (stores.has('msk')) {
-      docs.push(
-        np(ns, 'allow-egress-msk', {
-          podSelector: {},
-          policyTypes: ['Egress'],
-          egress: [{ to: [{ ipBlock: { cidr: PLACEHOLDER_CIDR } }], ports: tcp(contract.externalDependencies.msk.ports) }],
+          egress: [{ to: [{ ipBlock: { cidr: PLACEHOLDER_CIDR } }], ports: tcp(ports) }],
         }),
       );
     }

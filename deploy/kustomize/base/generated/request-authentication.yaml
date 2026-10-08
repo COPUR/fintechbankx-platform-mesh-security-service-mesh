@@ -50,6 +50,54 @@ spec:
 apiVersion: security.istio.io/v1
 kind: RequestAuthentication
 metadata:
+  name: keycloak-jwt-payment-request-to-pay-service
+  namespace: payments
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payment-request-to-pay-service
+  jwtRules:
+    - issuer: https://IDENTITY_HOST/realms/fintechbankx
+      jwksUri: https://IDENTITY_HOST/realms/fintechbankx/protocol/openid-connect/certs
+      audiences:
+        - svc-pay-request-to-pay
+      forwardOriginalToken: true
+---
+apiVersion: security.istio.io/v1
+kind: RequestAuthentication
+metadata:
+  name: keycloak-jwt-payment-recurring-mandates-service
+  namespace: payments
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payment-recurring-mandates-service
+  jwtRules:
+    - issuer: https://IDENTITY_HOST/realms/fintechbankx
+      jwksUri: https://IDENTITY_HOST/realms/fintechbankx/protocol/openid-connect/certs
+      audiences:
+        - svc-pay-recurring-mandates
+      forwardOriginalToken: true
+---
+apiVersion: security.istio.io/v1
+kind: RequestAuthentication
+metadata:
+  name: keycloak-jwt-payment-bulk-orchestration-service
+  namespace: payments
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payment-bulk-orchestration-service
+  jwtRules:
+    - issuer: https://IDENTITY_HOST/realms/fintechbankx
+      jwksUri: https://IDENTITY_HOST/realms/fintechbankx/protocol/openid-connect/certs
+      audiences:
+        - svc-pay-bulk-orchestration
+      forwardOriginalToken: true
+---
+apiVersion: security.istio.io/v1
+kind: RequestAuthentication
+metadata:
   name: keycloak-jwt-customer-profile-kyc-service
   namespace: customer
 spec:

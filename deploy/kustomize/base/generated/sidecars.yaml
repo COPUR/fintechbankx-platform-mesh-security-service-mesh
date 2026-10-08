@@ -43,6 +43,7 @@ spec:
         - identity/*
         - istio-system/*
         - observability/*
+        - open-finance/*
         - risk/*
   outboundTrafficPolicy:
     mode: REGISTRY_ONLY
@@ -101,7 +102,9 @@ spec:
   egress:
     - hosts:
         - ./*
+        - identity/*
         - istio-system/*
+        - observability/*
   outboundTrafficPolicy:
     mode: REGISTRY_ONLY
 ---

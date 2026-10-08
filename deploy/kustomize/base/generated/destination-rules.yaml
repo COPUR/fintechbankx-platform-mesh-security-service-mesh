@@ -154,10 +154,310 @@ spec:
 apiVersion: networking.istio.io/v1
 kind: DestinationRule
 metadata:
+  name: atm-directory-service
+  namespace: open-finance
+spec:
+  host: atm-directory-service.open-finance.svc.cluster.local
+  exportTo:
+    - "*"
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_REQUEST
+      localityLbSetting:
+        enabled: true
+    connectionPool:
+      tcp:
+        connectTimeout: 1s
+        maxConnections: 512
+      http:
+        http1MaxPendingRequests: 256
+        http2MaxRequests: 1024
+        maxRetries: 3
+        idleTimeout: 300s
+    outlierDetection:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: banking-metadata-service
+  namespace: open-finance
+spec:
+  host: banking-metadata-service.open-finance.svc.cluster.local
+  exportTo:
+    - "*"
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_REQUEST
+      localityLbSetting:
+        enabled: true
+    connectionPool:
+      tcp:
+        connectTimeout: 1s
+        maxConnections: 512
+      http:
+        http1MaxPendingRequests: 256
+        http2MaxRequests: 1024
+        maxRetries: 3
+        idleTimeout: 300s
+    outlierDetection:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: business-financial-data-service
+  namespace: open-finance
+spec:
+  host: business-financial-data-service.open-finance.svc.cluster.local
+  exportTo:
+    - "*"
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_REQUEST
+      localityLbSetting:
+        enabled: true
+    connectionPool:
+      tcp:
+        connectTimeout: 1s
+        maxConnections: 512
+      http:
+        http1MaxPendingRequests: 256
+        http2MaxRequests: 1024
+        maxRetries: 3
+        idleTimeout: 300s
+    outlierDetection:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: consent-authorization-service
+  namespace: open-finance
+spec:
+  host: consent-authorization-service.open-finance.svc.cluster.local
+  exportTo:
+    - "*"
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_REQUEST
+      localityLbSetting:
+        enabled: true
+    connectionPool:
+      tcp:
+        connectTimeout: 1s
+        maxConnections: 512
+      http:
+        http1MaxPendingRequests: 256
+        http2MaxRequests: 1024
+        maxRetries: 3
+        idleTimeout: 300s
+    outlierDetection:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: open-products-catalog-service
+  namespace: open-finance
+spec:
+  host: open-products-catalog-service.open-finance.svc.cluster.local
+  exportTo:
+    - "*"
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_REQUEST
+      localityLbSetting:
+        enabled: true
+    connectionPool:
+      tcp:
+        connectTimeout: 1s
+        maxConnections: 512
+      http:
+        http1MaxPendingRequests: 256
+        http2MaxRequests: 1024
+        maxRetries: 3
+        idleTimeout: 300s
+    outlierDetection:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: payee-verification-service
+  namespace: open-finance
+spec:
+  host: payee-verification-service.open-finance.svc.cluster.local
+  exportTo:
+    - "*"
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_REQUEST
+      localityLbSetting:
+        enabled: true
+    connectionPool:
+      tcp:
+        connectTimeout: 1s
+        maxConnections: 512
+      http:
+        http1MaxPendingRequests: 256
+        http2MaxRequests: 1024
+        maxRetries: 3
+        idleTimeout: 300s
+    outlierDetection:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: personal-financial-data-service
+  namespace: open-finance
+spec:
+  host: personal-financial-data-service.open-finance.svc.cluster.local
+  exportTo:
+    - "*"
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_REQUEST
+      localityLbSetting:
+        enabled: true
+    connectionPool:
+      tcp:
+        connectTimeout: 1s
+        maxConnections: 512
+      http:
+        http1MaxPendingRequests: 256
+        http2MaxRequests: 1024
+        maxRetries: 3
+        idleTimeout: 300s
+    outlierDetection:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: payment-bulk-orchestration-service
+  namespace: payments
+spec:
+  host: payment-bulk-orchestration-service.payments.svc.cluster.local
+  exportTo:
+    - "*"
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_REQUEST
+      localityLbSetting:
+        enabled: true
+    connectionPool:
+      tcp:
+        connectTimeout: 1s
+        maxConnections: 512
+      http:
+        http1MaxPendingRequests: 256
+        http2MaxRequests: 1024
+        maxRetries: 3
+        idleTimeout: 300s
+    outlierDetection:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
   name: payment-initiation-settlement-service
   namespace: payments
 spec:
   host: payment-initiation-settlement-service.payments.svc.cluster.local
+  exportTo:
+    - "*"
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_REQUEST
+      localityLbSetting:
+        enabled: true
+    connectionPool:
+      tcp:
+        connectTimeout: 1s
+        maxConnections: 512
+      http:
+        http1MaxPendingRequests: 256
+        http2MaxRequests: 1024
+        maxRetries: 3
+        idleTimeout: 300s
+    outlierDetection:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: payment-recurring-mandates-service
+  namespace: payments
+spec:
+  host: payment-recurring-mandates-service.payments.svc.cluster.local
+  exportTo:
+    - "*"
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_REQUEST
+      localityLbSetting:
+        enabled: true
+    connectionPool:
+      tcp:
+        connectTimeout: 1s
+        maxConnections: 512
+      http:
+        http1MaxPendingRequests: 256
+        http2MaxRequests: 1024
+        maxRetries: 3
+        idleTimeout: 300s
+    outlierDetection:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: payment-request-to-pay-service
+  namespace: payments
+spec:
+  host: payment-request-to-pay-service.payments.svc.cluster.local
   exportTo:
     - "*"
   trafficPolicy:

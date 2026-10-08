@@ -21,27 +21,33 @@ in the `banking` namespace, which would conflict with Istio's own injector).
 
 | Caller | Callee | Evidence | Mesh policy |
 |---|---|---|---|
+| ingress gateway | 7 open-finance APIs (`/open-finance/v1/{consents,confirmation-of-payee,accounts,corporate,metadata,atms,products}`) | Controllers on branch `claude/project-thread-nfwa8t`; confirmed by service threads | ALLOW by gateway principal, path-scoped; tokens checked by the services (DPoP/FAPI) |
 | ingress gateway | 5 service APIs (customer also serves the staff/customer UI) (`/api/v1/{loans,payments,customers,risk,compliance}`) | `@RequestMapping` in each controller | ALLOW by gateway principal, JWT required |
 | `lending/loan-lifecycle-service` | `customer/customer-profile-kyc-service` | `CUSTOMER_SERVICE_BASE_URL`, `CustomerProfileHttpAdapter` (GET customer, POST credit reserve/release); client-credentials token since loan commit a33b418 | ALLOW by principal on 8080, method- and path-scoped |
 | `payments/payment-initiation-settlement-service` | `risk/risk-decisioning-service`, `compliance/compliance-evidence-service` | Confirmed by the service threads (2026-10-08); no adapter on the payment branch yet | ALLOW by principal on 8080, port-only (paths unknown) |
 | every service | `identity/keycloak` | `OIDC_JWK_SET_URI`; client-credentials per platform contract | ALLOW JWKS GET, discovery GET, token POST |
 | every service | `observability/otel-collector` | platform contract (OTLP 4317/4318) | ALLOW ports 4317/4318 |
-| `observability/prometheus` | every service, port 8081 | pod annotations `prometheus.io/port: 8081` | ALLOW `/actuator/prometheus`, `/actuator/health*` |
-| loan, payments, customer | Amazon MSK | `spring.kafka` (outbox relay) | ServiceEntry + NetworkPolicy to `MSK_CIDR` |
-| all five services, Keycloak | Aurora PostgreSQL | `DB_URL` | ServiceEntry + NetworkPolicy to `AURORA_CIDR` |
+| `payments/payment-initiation-settlement-service` | `open-finance/consent-authorization-service`, `open-finance/payee-verification-service` | Confirmed by the service threads (2026-10-08); no adapter on the payment branch yet | ALLOW by principal on 8080, port-only |
+| `observability/prometheus` | every service (including the 3 new payments and 7 open-finance workloads), port 8081 | pod annotations `prometheus.io/port: 8081` | ALLOW `/actuator/prometheus`, `/actuator/health*` |
+| loan, payment initiation, customer, open-finance consent, payee verification and the 3 data services | Amazon MSK | `spring.kafka`; service threads | ServiceEntry + NetworkPolicy to `MSK_CIDR`, selected per workload |
+| open-finance personal, business and banking-metadata data services | DocumentDB 27017, ElastiCache Redis 6379 | `OPENFINANCE_*_MONGODB_URI`, `OPENFINANCE_*_REDIS_URL` | ServiceEntries + NetworkPolicy to `DOCDB_CIDR` / `REDIS_CIDR`, selected per workload |
+| lending, payment initiation, customer, risk, compliance, open-finance consent, payee verification, ATM, products, Keycloak | Aurora PostgreSQL | `DB_URL` | ServiceEntry + NetworkPolicy to `AURORA_CIDR` |
 
 ### Gaps (not allowed by any policy)
 
 | Caller | Wants | Why it is a gap |
 |---|---|---|
 | `payments/payment-initiation-settlement-service` | core-banking accounts API (`GET /api/v1/accounts/{id}`) | `ACCOUNTS_SERVICE_BASE_URL` is empty in Helm values and defaults to `http://core-banking-accounts:8080`; no core-banking repo, namespace or SA exists. With `ACCOUNTS_ADAPTER=http` the service fails closed. |
-| `payments` | risk / compliance paths | Edge confirmed but no adapter yet; the rule is port-only until methods and paths are known, then it should be narrowed like loan -> customer. |
-| `open-finance/*` | MongoDB, Redis | No DocumentDB/ElastiCache endpoint in the platform contract. |
+| `payments` request-to-pay, recurring-mandates, bulk-orchestration | ingress routes, datastores, call edges | Only the SAs are confirmed; they get identity, telemetry and scraping edges. Their controllers also expose `/open-finance/v1/{accounts,consents,loans}`, which overlap open-finance routes. |
+| `payments` | risk / compliance / consent / payee-verification paths | Edge confirmed but no adapter yet; the rule is port-only until methods and paths are known, then it should be narrowed like loan -> customer. |
 | `risk`, `compliance` | Kafka | Neither service configures Kafka yet; no MSK egress is granted. |
 
-Open-finance charts are placeholders (`openfinance/microservice:latest`, no SA,
-no management port), so `open-finance` is default-deny with no allow rules and
-no RequestAuthentication (their own HMAC/DPoP tokens are not Keycloak tokens).
+Open-finance services validate their own DPoP/FAPI tokens (issuer is service
+configuration, `Authorization: DPoP` or `Bearer`; ATM and products are public
+open data), so `open-finance` has no Keycloak RequestAuthentication or
+`require-jwt-for-api`; it relies on default-deny, per-principal ALLOW rules and
+the services' own checks. Datastore egress (Aurora, MSK, DocumentDB, Redis) is
+selected per workload, not per namespace.
 
 ## What is in `deploy/`
 
@@ -55,7 +61,7 @@ no RequestAuthentication (their own HMAC/DPoP tokens are not Keycloak tokens).
 | Traffic | `generated/destination-rules.yaml`, `generated/service-entries.yaml`, `generated/sidecars.yaml`, `generated/ingress-routing.yaml` | See resilience mapping |
 | NetworkPolicy | `generated/network-policies.yaml` | Default-deny, DNS, istiod 15012, node health 15020/15021, scraping, edge-derived ingress/egress, Aurora/MSK/VPC-endpoint CIDRs |
 | Secrets | `k8s/platform/external-secrets/cluster-secret-store.yaml`, `deploy/kustomize/base/ingress-tls-externalsecret.yaml` | `aws-secrets-manager` via IRSA; gateway TLS from `<env>/platform/ingress-tls` |
-| Params | `deploy/kustomize/overlays/<env>/params.env`, `components/mesh-params` | Identity/API host, region, CIDRs, environment |
+| Params | `deploy/kustomize/overlays/<env>/params.env`, `components/mesh-params` | Identity/API host, region, VPC/Aurora/MSK/DocumentDB/Redis CIDRs, environment |
 
 ### Resilience mapping
 
@@ -89,7 +95,7 @@ Only values backed by the dependency-resilience policy pack are set:
 |---|---|---|
 | injection | istio-system | Control plane |
 | injection | external-secrets | Platform contract addendum; ESO webhook is called by the kube-apiserver |
-| requestAuthentication | open-finance | Own HMAC/DPoP tokens, not Keycloak |
+| requestAuthentication | open-finance | Own DPoP/FAPI tokens with a per-service issuer; open data is public |
 | networkPolicyDefaultDeny | istio-system, external-secrets | Webhooks called from EKS control-plane ENIs; not yet drilled |
 
 There is no PeerAuthentication exception: no PERMISSIVE or DISABLE anywhere.
@@ -98,7 +104,7 @@ There is no PeerAuthentication exception: no PERMISSIVE or DISABLE anywhere.
 
 ```bash
 npm ci
-npm test                               # 16 node:test cases (validator + contract)
+npm test                               # 18 node:test cases (validator + contract)
 npm run validate:strict-mtls           # R1..R8 on the repo sources
 bash scripts/ci/validate-manifests.sh  # kustomize build x3, kubeconform (Istio/ESO CRD
                                        # schemas from datreeio CRDs-catalog), validator on

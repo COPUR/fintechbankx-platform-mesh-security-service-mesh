@@ -456,6 +456,318 @@ spec:
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
+  name: allow-from-open-finance-atm-directory-service-to-keycloak
+  namespace: identity
+  annotations:
+    fintechbankx.io/evidence: spring.security.oauth2.resourceserver.jwt.jwk-set-uri in every service application.yml | platform contract - one confidential client per service, client-credentials
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/atm-directory-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/certs
+              - /realms/fintechbankx/.well-known/openid-configuration
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/atm-directory-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/token
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-open-finance-banking-metadata-service-to-keycloak
+  namespace: identity
+  annotations:
+    fintechbankx.io/evidence: spring.security.oauth2.resourceserver.jwt.jwk-set-uri in every service application.yml | platform contract - one confidential client per service, client-credentials
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/banking-metadata-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/certs
+              - /realms/fintechbankx/.well-known/openid-configuration
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/banking-metadata-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/token
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-open-finance-business-financial-data-service-to-keycloak
+  namespace: identity
+  annotations:
+    fintechbankx.io/evidence: spring.security.oauth2.resourceserver.jwt.jwk-set-uri in every service application.yml | platform contract - one confidential client per service, client-credentials
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/business-financial-data-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/certs
+              - /realms/fintechbankx/.well-known/openid-configuration
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/business-financial-data-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/token
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-open-finance-consent-authorization-service-to-keycloak
+  namespace: identity
+  annotations:
+    fintechbankx.io/evidence: spring.security.oauth2.resourceserver.jwt.jwk-set-uri in every service application.yml | platform contract - one confidential client per service, client-credentials
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/consent-authorization-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/certs
+              - /realms/fintechbankx/.well-known/openid-configuration
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/consent-authorization-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/token
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-open-finance-open-products-catalog-service-to-keycloak
+  namespace: identity
+  annotations:
+    fintechbankx.io/evidence: spring.security.oauth2.resourceserver.jwt.jwk-set-uri in every service application.yml | platform contract - one confidential client per service, client-credentials
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/open-products-catalog-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/certs
+              - /realms/fintechbankx/.well-known/openid-configuration
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/open-products-catalog-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/token
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-open-finance-payee-verification-service-to-keycloak
+  namespace: identity
+  annotations:
+    fintechbankx.io/evidence: spring.security.oauth2.resourceserver.jwt.jwk-set-uri in every service application.yml | platform contract - one confidential client per service, client-credentials
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/payee-verification-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/certs
+              - /realms/fintechbankx/.well-known/openid-configuration
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/payee-verification-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/token
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-open-finance-personal-financial-data-service-to-keycloak
+  namespace: identity
+  annotations:
+    fintechbankx.io/evidence: spring.security.oauth2.resourceserver.jwt.jwk-set-uri in every service application.yml | platform contract - one confidential client per service, client-credentials
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/personal-financial-data-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/certs
+              - /realms/fintechbankx/.well-known/openid-configuration
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/personal-financial-data-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/token
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-payments-payment-bulk-orchestration-service-to-keycloak
+  namespace: identity
+  annotations:
+    fintechbankx.io/evidence: spring.security.oauth2.resourceserver.jwt.jwk-set-uri in every service application.yml | platform contract - one confidential client per service, client-credentials
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-bulk-orchestration-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/certs
+              - /realms/fintechbankx/.well-known/openid-configuration
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-bulk-orchestration-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/token
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
   name: allow-from-payments-payment-initiation-settlement-service-to-keycloak
   namespace: identity
   annotations:
@@ -483,6 +795,84 @@ spec:
         - source:
             principals:
               - cluster.local/ns/payments/sa/payment-initiation-settlement-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/token
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-payments-payment-recurring-mandates-service-to-keycloak
+  namespace: identity
+  annotations:
+    fintechbankx.io/evidence: spring.security.oauth2.resourceserver.jwt.jwk-set-uri in every service application.yml | platform contract - one confidential client per service, client-credentials
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-recurring-mandates-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/certs
+              - /realms/fintechbankx/.well-known/openid-configuration
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-recurring-mandates-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/token
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-payments-payment-request-to-pay-service-to-keycloak
+  namespace: identity
+  annotations:
+    fintechbankx.io/evidence: spring.security.oauth2.resourceserver.jwt.jwk-set-uri in every service application.yml | platform contract - one confidential client per service, client-credentials
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-request-to-pay-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/certs
+              - /realms/fintechbankx/.well-known/openid-configuration
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-request-to-pay-service
       to:
         - operation:
             ports:
@@ -699,6 +1089,246 @@ spec:
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
+  name: allow-from-open-finance-atm-directory-service-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/atm-directory-service
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/atm-directory-service
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-open-finance-banking-metadata-service-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/banking-metadata-service
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/banking-metadata-service
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-open-finance-business-financial-data-service-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/business-financial-data-service
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/business-financial-data-service
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-open-finance-consent-authorization-service-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/consent-authorization-service
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/consent-authorization-service
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-open-finance-open-products-catalog-service-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/open-products-catalog-service
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/open-products-catalog-service
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-open-finance-payee-verification-service-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/payee-verification-service
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/payee-verification-service
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-open-finance-personal-financial-data-service-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/personal-financial-data-service
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/open-finance/sa/personal-financial-data-service
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-payments-payment-bulk-orchestration-service-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-bulk-orchestration-service
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-bulk-orchestration-service
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
   name: allow-from-payments-payment-initiation-settlement-service-to-otel-collector
   namespace: observability
   annotations:
@@ -721,6 +1351,66 @@ spec:
         - source:
             principals:
               - cluster.local/ns/payments/sa/payment-initiation-settlement-service
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-payments-payment-recurring-mandates-service-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-recurring-mandates-service
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-recurring-mandates-service
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-payments-payment-request-to-pay-service-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: platform contract OTLP gRPC otel-collector.observability.svc.cluster.local:4317 | platform contract OTLP HTTP :4318
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-request-to-pay-service
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-request-to-pay-service
       to:
         - operation:
             ports:
@@ -759,6 +1449,447 @@ spec:
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
+  name: allow-from-istio-ingress-istio-ingressgateway-to-atm-directory-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: confirmed by service thread 2026-10-08; /open-finance/v1/atms
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: atm-directory-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            paths:
+              - /open-finance/v1/atms
+              - /open-finance/v1/atms/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-atm-directory-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: Helm pod annotations prometheus.io/port=8081, path /actuator/prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: atm-directory-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "8081"
+            methods:
+              - GET
+            paths:
+              - /actuator/prometheus
+              - /actuator/health
+              - /actuator/health/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-istio-ingress-istio-ingressgateway-to-banking-metadata-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: confirmed by service thread 2026-10-08; /open-finance/v1/metadata/...
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: banking-metadata-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            paths:
+              - /open-finance/v1/metadata/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-banking-metadata-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: Helm pod annotations prometheus.io/port=8081, path /actuator/prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: banking-metadata-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "8081"
+            methods:
+              - GET
+            paths:
+              - /actuator/prometheus
+              - /actuator/health
+              - /actuator/health/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-istio-ingress-istio-ingressgateway-to-business-financial-data-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: confirmed by service thread 2026-10-08; /open-finance/v1/corporate/{accounts,transactions}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: business-financial-data-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            paths:
+              - /open-finance/v1/corporate/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-business-financial-data-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: Helm pod annotations prometheus.io/port=8081, path /actuator/prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: business-financial-data-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "8081"
+            methods:
+              - GET
+            paths:
+              - /actuator/prometheus
+              - /actuator/health
+              - /actuator/health/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-istio-ingress-istio-ingressgateway-to-consent-authorization-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: confirmed by service thread 2026-10-08; ConsentController /open-finance/v1/consents
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: consent-authorization-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            paths:
+              - /open-finance/v1/consents
+              - /open-finance/v1/consents/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-consent-authorization-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: Helm pod annotations prometheus.io/port=8081, path /actuator/prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: consent-authorization-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "8081"
+            methods:
+              - GET
+            paths:
+              - /actuator/prometheus
+              - /actuator/health
+              - /actuator/health/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-payments-payment-initiation-settlement-service-to-consent-authorization-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: confirmed by service thread 2026-10-08; adapter not yet on claude/project-thread-ty79y4
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: consent-authorization-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-initiation-settlement-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-istio-ingress-istio-ingressgateway-to-open-products-catalog-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: confirmed by service thread 2026-10-08; /open-finance/v1/products
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: open-products-catalog-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            paths:
+              - /open-finance/v1/products
+              - /open-finance/v1/products/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-open-products-catalog-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: Helm pod annotations prometheus.io/port=8081, path /actuator/prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: open-products-catalog-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "8081"
+            methods:
+              - GET
+            paths:
+              - /actuator/prometheus
+              - /actuator/health
+              - /actuator/health/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-istio-ingress-istio-ingressgateway-to-payee-verification-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: confirmed by service thread 2026-10-08; @RequestMapping("/open-finance/v1/confirmation-of-payee")
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payee-verification-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            paths:
+              - /open-finance/v1/confirmation-of-payee
+              - /open-finance/v1/confirmation-of-payee/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-payee-verification-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: Helm pod annotations prometheus.io/port=8081, path /actuator/prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payee-verification-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "8081"
+            methods:
+              - GET
+            paths:
+              - /actuator/prometheus
+              - /actuator/health
+              - /actuator/health/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-payments-payment-initiation-settlement-service-to-payee-verification-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: confirmed by service thread 2026-10-08; adapter not yet on claude/project-thread-ty79y4
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payee-verification-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-initiation-settlement-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-istio-ingress-istio-ingressgateway-to-personal-financial-data-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: confirmed by service thread 2026-10-08; /open-finance/v1/accounts
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: personal-financial-data-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            paths:
+              - /open-finance/v1/accounts
+              - /open-finance/v1/accounts/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-personal-financial-data-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: Helm pod annotations prometheus.io/port=8081, path /actuator/prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: personal-financial-data-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "8081"
+            methods:
+              - GET
+            paths:
+              - /actuator/prometheus
+              - /actuator/health
+              - /actuator/health/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-payment-bulk-orchestration-service
+  namespace: payments
+  annotations:
+    fintechbankx.io/evidence: Helm pod annotations prometheus.io/port=8081, path /actuator/prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payment-bulk-orchestration-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "8081"
+            methods:
+              - GET
+            paths:
+              - /actuator/prometheus
+              - /actuator/health
+              - /actuator/health/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
   name: allow-from-istio-ingress-istio-ingressgateway-to-payment-initiation-settlement-service
   namespace: payments
   annotations:
@@ -792,6 +1923,62 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: payment-initiation-settlement-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "8081"
+            methods:
+              - GET
+            paths:
+              - /actuator/prometheus
+              - /actuator/health
+              - /actuator/health/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-payment-recurring-mandates-service
+  namespace: payments
+  annotations:
+    fintechbankx.io/evidence: Helm pod annotations prometheus.io/port=8081, path /actuator/prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payment-recurring-mandates-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "8081"
+            methods:
+              - GET
+            paths:
+              - /actuator/prometheus
+              - /actuator/health
+              - /actuator/health/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-payment-request-to-pay-service
+  namespace: payments
+  annotations:
+    fintechbankx.io/evidence: Helm pod annotations prometheus.io/port=8081, path /actuator/prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payment-request-to-pay-service
   action: ALLOW
   rules:
     - from:
@@ -969,6 +2156,26 @@ kind: AuthorizationPolicy
 metadata:
   name: allow-health-endpoints
   namespace: compliance
+  annotations:
+    fintechbankx.io/purpose: Kubelet probes are rewritten by the sidecar agent (port 15020) and never reach this rule; it keeps /actuator/health on the management port reachable for mesh health checkers.
+spec:
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            methods:
+              - GET
+            ports:
+              - "8081"
+            paths:
+              - /actuator/health
+              - /actuator/health/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-health-endpoints
+  namespace: open-finance
   annotations:
     fintechbankx.io/purpose: Kubelet probes are rewritten by the sidecar agent (port 15020) and never reach this rule; it keeps /actuator/health on the management port reachable for mesh health checkers.
 spec:

@@ -131,7 +131,7 @@ test('contract: recorded gaps are not allowed by any policy', () => {
   const paymentEgress = docs.filter(
     (d) => d.doc.kind === 'NetworkPolicy' && d.doc.metadata.namespace === 'payments' && /allow-egress-to-/.test(d.doc.metadata.name),
   );
-  assert.deepEqual(paymentEgress.map((d) => d.doc.metadata.name).sort(), ['allow-egress-to-compliance', 'allow-egress-to-identity', 'allow-egress-to-observability', 'allow-egress-to-risk']);
+  assert.deepEqual(paymentEgress.map((d) => d.doc.metadata.name).sort(), ['allow-egress-to-compliance', 'allow-egress-to-identity', 'allow-egress-to-observability', 'allow-egress-to-open-finance', 'allow-egress-to-risk']);
 });
 
 test('contract: east-west service edges are exactly the confirmed ones and scoped', () => {
@@ -140,6 +140,8 @@ test('contract: east-west service edges are exactly the confirmed ones and scope
   assert.deepEqual([...new Set(eastWest.map((e) => `${e.from.ns}/${e.from.sa}->${e.to.ns}/${e.to.sa}`))].sort(), [
     'lending/loan-lifecycle-service->customer/customer-profile-kyc-service',
     'payments/payment-initiation-settlement-service->compliance/compliance-evidence-service',
+    'payments/payment-initiation-settlement-service->open-finance/consent-authorization-service',
+    'payments/payment-initiation-settlement-service->open-finance/payee-verification-service',
     'payments/payment-initiation-settlement-service->risk/risk-decisioning-service',
   ]);
   for (const e of eastWest) {
@@ -149,4 +151,48 @@ test('contract: east-west service edges are exactly the confirmed ones and scope
     );
     assert.equal(e.port, 8080);
   }
+});
+
+test('contract: datastore egress is scoped to the workloads that declare the store', () => {
+  const docs = deployable();
+  const np = (ns, name) =>
+    docs.find((d) => d.doc.kind === 'NetworkPolicy' && d.doc.metadata.namespace === ns && d.doc.metadata.name === name)?.doc;
+  const selected = (doc) => doc.spec.podSelector.matchExpressions[0].values;
+  const dataServices = ['banking-metadata-service', 'business-financial-data-service', 'personal-financial-data-service'];
+  assert.deepEqual(selected(np('open-finance', 'allow-egress-documentdb')), dataServices);
+  assert.deepEqual(selected(np('open-finance', 'allow-egress-redis')), dataServices);
+  assert.deepEqual(np('open-finance', 'allow-egress-documentdb').spec.egress[0].ports, [{ protocol: 'TCP', port: 27017 }]);
+  assert.deepEqual(np('open-finance', 'allow-egress-redis').spec.egress[0].ports, [{ protocol: 'TCP', port: 6379 }]);
+  assert.deepEqual(selected(np('open-finance', 'allow-egress-aurora')), [
+    'atm-directory-service', 'consent-authorization-service', 'open-products-catalog-service', 'payee-verification-service',
+  ]);
+  assert.deepEqual(selected(np('open-finance', 'allow-egress-msk')), [
+    'banking-metadata-service', 'business-financial-data-service', 'consent-authorization-service',
+    'payee-verification-service', 'personal-financial-data-service',
+  ]);
+  // Unconfirmed payment workloads get no datastore egress.
+  for (const name of ['allow-egress-aurora', 'allow-egress-msk']) {
+    assert.deepEqual(selected(np('payments', name)), ['payment-initiation-settlement-service']);
+  }
+  for (const ns of ['lending', 'payments', 'customer', 'risk', 'compliance']) {
+    assert.equal(np(ns, 'allow-egress-documentdb'), undefined);
+    assert.equal(np(ns, 'allow-egress-redis'), undefined);
+  }
+});
+
+test('contract: open-finance keeps its documented token exception and is still default-deny', () => {
+  const docs = deployable();
+  const inOf = (kind) => docs.filter((d) => d.doc.kind === kind && d.doc.metadata.namespace === 'open-finance').map((d) => d.doc);
+  assert.equal(inOf('RequestAuthentication').length, 0);
+  assert.ok(inOf('AuthorizationPolicy').some((p) => p.metadata.name === 'default-deny'));
+  const callers = new Set(
+    inOf('AuthorizationPolicy')
+      .filter((p) => p.spec.action === 'ALLOW')
+      .flatMap((p) => p.spec.rules.flatMap((r) => (r.from || []).flatMap((f) => f.source.principals || []))),
+  );
+  assert.deepEqual([...callers].sort(), [
+    'cluster.local/ns/istio-ingress/sa/istio-ingressgateway',
+    'cluster.local/ns/observability/sa/prometheus',
+    'cluster.local/ns/payments/sa/payment-initiation-settlement-service',
+  ]);
 });
