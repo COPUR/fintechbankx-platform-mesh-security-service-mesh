@@ -329,6 +329,8 @@ kind: EnvoyFilter
 metadata:
   name: anonymous-open-data-rate-limit
   namespace: istio-ingress
+  annotations:
+    fintechbankx.io/effective-limit: "per gateway pod and route, shared by all clients: 50 req/s, burst 100; cluster-wide per route = that x gateway replicas: dev 2-4 pods = 100-200 req/s, staging 3-6 pods = 150-300 req/s, prod 3-12 pods = 150-600 req/s"
 spec:
   workloadSelector:
     labels:

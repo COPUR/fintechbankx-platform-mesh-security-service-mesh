@@ -38,13 +38,24 @@ gateway:
   containerPorts: [80, 443]
   # Edge rate limit for the anonymous open-data APIs (platform review
   # 2026-10-08). Envoy local rate limit per gateway pod, keyed on nothing
-  # (one bucket per route per pod), 429 when empty. Proposed values: tune
-  # from traffic; total = per-pod rate x gateway replicas.
+  # (one bucket per route per pod, shared by every client), 429 when empty.
+  # Proposed values: tune from traffic; total = per-pod rate x gateway
+  # replicas (gatewayReplicas mirrors deploy/istio/helm autoscaling; tests
+  # fail when they drift).
+  # Not per client yet: Istio 1.24.3 ships Envoy 1.32, whose local rate limit
+  # has no dynamic descriptors (max_dynamic_descriptors, Envoy 1.34 / Istio
+  # 1.26), and the NLB does not pass the client address to the gateway
+  # (preserve_client_ip off, no proxy protocol). Per-client limits need the
+  # Istio upgrade plus proxy protocol (or a global rate limit service).
   anonymousRateLimit:
     routes: [svc-of-open-products-catalog, svc-of-atm-directory, svc-of-banking-metadata]
     maxTokens: 100
     tokensPerFill: 50
     fillInterval: 1s
+    gatewayReplicas:
+      dev: [2, 4]
+      staging: [3, 6]
+      prod: [3, 12]
 
 # kind: service   -> bounded-context namespace with application workloads
 # kind: platform  -> platform namespace managed by a platform repo

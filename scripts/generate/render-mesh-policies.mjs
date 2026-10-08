@@ -463,6 +463,18 @@ const forwardedHeaders = (host) => ({
 // The HTTP filter is inserted without a bucket (pass-through); each listed
 // route (Envoy route name = VirtualService http route name) gets its own
 // token bucket and returns 429 with x-fbx-rate-limited when it is empty.
+// Per pod and route, shared by all clients; cluster-wide = x gateway replicas.
+function effectiveLimit(rl) {
+  if (rl.fillInterval !== '1s') throw new Error('anonymousRateLimit: effective-limit text assumes fillInterval 1s');
+  const envs = Object.entries(rl.gatewayReplicas || {}).map(
+    ([env, [min, max]]) => `${env} ${min}-${max} pods = ${rl.tokensPerFill * min}-${rl.tokensPerFill * max} req/s`,
+  );
+  return (
+    `per gateway pod and route, shared by all clients: ${rl.tokensPerFill} req/s, burst ${rl.maxTokens}; ` +
+    `cluster-wide per route = that x gateway replicas: ${envs.join(', ')}`
+  );
+}
+
 function anonymousRateLimit(contract) {
   const rl = contract.gateway.anonymousRateLimit;
   if (!rl) return [];
@@ -474,7 +486,11 @@ function anonymousRateLimit(contract) {
     {
       apiVersion: 'networking.istio.io/v1alpha3',
       kind: 'EnvoyFilter',
-      metadata: { name: 'anonymous-open-data-rate-limit', namespace: contract.gateway.namespace },
+      metadata: {
+        name: 'anonymous-open-data-rate-limit',
+        namespace: contract.gateway.namespace,
+        annotations: { 'fintechbankx.io/effective-limit': effectiveLimit(rl) },
+      },
       spec: {
         workloadSelector: { labels: contract.gateway.selector },
         configPatches: [
