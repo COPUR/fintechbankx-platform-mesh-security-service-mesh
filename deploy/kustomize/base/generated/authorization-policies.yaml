@@ -2682,7 +2682,7 @@ metadata:
   name: allow-from-istio-ingress-istio-ingressgateway-to-consent-authorization-service
   namespace: open-finance
   annotations:
-    fintechbankx.io/evidence: confirmed by service thread 2026-10-08; ConsentController /open-finance/v1/consents
+    fintechbankx.io/evidence: confirmed by service thread 2026-10-08; ConsentController /open-finance/v1/consents | consent PR
 spec:
   selector:
     matchLabels:
@@ -2700,6 +2700,34 @@ spec:
             paths:
               - /open-finance/v1/consents
               - /open-finance/v1/consents/*
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+              - POST
+            paths:
+              - /oauth2/authorize
+              - /oauth2/token
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+              - PATCH
+            paths:
+              - /api/v1/consents/{*}/authorize
+              - /api/v1/consents/{*}/revoke
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -3013,6 +3041,31 @@ spec:
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
+  name: allow-from-istio-ingress-istio-ingressgateway-to-payment-bulk-orchestration-service
+  namespace: payments
+  annotations:
+    fintechbankx.io/evidence: bulk orchestration PR
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payment-bulk-orchestration-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            paths:
+              - /open-finance/v1/file-payments
+              - /open-finance/v1/file-payments/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
   name: allow-from-observability-prometheus-to-payment-bulk-orchestration-service
   namespace: payments
   annotations:
@@ -3090,6 +3143,33 @@ spec:
               - /actuator/prometheus
               - /actuator/health
               - /actuator/health/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-istio-ingress-istio-ingressgateway-to-payment-recurring-mandates-service
+  namespace: payments
+  annotations:
+    fintechbankx.io/evidence: recurring-mandates PR
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payment-recurring-mandates-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            paths:
+              - /open-finance/v1/vrp/payment-consents
+              - /open-finance/v1/vrp/payment-consents/*
+              - /open-finance/v1/vrp/payments
+              - /open-finance/v1/vrp/payments/*
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy

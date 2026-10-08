@@ -5270,6 +5270,18 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: payment-initiation-settlement-service
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: payments
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: payment-recurring-mandates-service
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: payments
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: payment-bulk-orchestration-service
       ports:
         - protocol: TCP
           port: 8080

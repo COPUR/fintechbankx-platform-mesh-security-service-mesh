@@ -277,3 +277,21 @@ test('gateway: service-only operations are not reachable from the ingress gatewa
   const admin = gwOps('identity', 'allow-from-customer-customer-profile-kyc-service-to-keycloak');
   assert.ok(admin.some((o) => o.methods?.includes('PUT') && o.paths.includes('/admin/realms/fintechbankx/users/*')));
 });
+
+test('gateway: TPP payment APIs and the consent authorization flow are routed and allowed', () => {
+  const docs = deployable();
+  const api = docs.find((d) => d.doc.kind === 'VirtualService' && d.doc.metadata.name === 'fintechbankx-api').doc;
+  const prefixes = (id) => api.spec.http.find((r) => r.name === id).match.map((m) => m.uri.prefix);
+  assert.deepEqual(prefixes('svc-of-consent-authorization'), ['/open-finance/v1/consents', '/oauth2', '/api/v1/consents']);
+  assert.deepEqual(prefixes('svc-pay-recurring-mandates'), ['/open-finance/v1/vrp']);
+  assert.deepEqual(prefixes('svc-pay-bulk-orchestration'), ['/open-finance/v1/file-payments']);
+  const paths = (ns, name) =>
+    docs
+      .find((d) => d.doc.kind === 'AuthorizationPolicy' && d.doc.metadata.namespace === ns && d.doc.metadata.name === name)
+      .doc.spec.rules.flatMap((r) => r.to.flatMap((t) => t.operation.paths || []));
+  const consent = paths('open-finance', 'allow-from-istio-ingress-istio-ingressgateway-to-consent-authorization-service');
+  for (const p of ['/oauth2/authorize', '/oauth2/token', '/api/v1/consents/{*}/authorize', '/api/v1/consents/{*}/revoke']) assert.ok(consent.includes(p), p);
+  assert.ok(!consent.includes('/api/v1/consents/*'), 'service view GET /api/v1/consents/{id} stays in-cluster');
+  assert.ok(paths('payments', 'allow-from-istio-ingress-istio-ingressgateway-to-payment-recurring-mandates-service').includes('/open-finance/v1/vrp/payments/*'));
+  assert.ok(paths('payments', 'allow-from-istio-ingress-istio-ingressgateway-to-payment-bulk-orchestration-service').includes('/open-finance/v1/file-payments/*'));
+});

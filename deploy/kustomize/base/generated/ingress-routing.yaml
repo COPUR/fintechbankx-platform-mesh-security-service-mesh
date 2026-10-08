@@ -83,6 +83,42 @@ spec:
           remove:
             - forwarded
             - x-forwarded-prefix
+    - name: svc-pay-recurring-mandates
+      match:
+        - uri:
+            prefix: /open-finance/v1/vrp
+      route:
+        - destination:
+            host: payment-recurring-mandates-service.payments.svc.cluster.local
+            port:
+              number: 8080
+      headers:
+        request:
+          set:
+            x-forwarded-proto: https
+            x-forwarded-host: API_HOST
+            x-forwarded-port: "443"
+          remove:
+            - forwarded
+            - x-forwarded-prefix
+    - name: svc-pay-bulk-orchestration
+      match:
+        - uri:
+            prefix: /open-finance/v1/file-payments
+      route:
+        - destination:
+            host: payment-bulk-orchestration-service.payments.svc.cluster.local
+            port:
+              number: 8080
+      headers:
+        request:
+          set:
+            x-forwarded-proto: https
+            x-forwarded-host: API_HOST
+            x-forwarded-port: "443"
+          remove:
+            - forwarded
+            - x-forwarded-prefix
     - name: svc-cus-profile-kyc
       match:
         - uri:
@@ -141,6 +177,10 @@ spec:
       match:
         - uri:
             prefix: /open-finance/v1/consents
+        - uri:
+            prefix: /oauth2
+        - uri:
+            prefix: /api/v1/consents
       route:
         - destination:
             host: consent-authorization-service.open-finance.svc.cluster.local

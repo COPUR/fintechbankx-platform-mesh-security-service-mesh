@@ -67,9 +67,11 @@ namespaces:
       - serviceAccount: payment-recurring-mandates-service
         serviceId: svc-pay-recurring-mandates
         sourceRepo: fintechbankx-lendingpayments-payment-orchestration-recurring-mandates
+        apiPrefix: /open-finance/v1/vrp   # TPP-facing, DPoP enforced by the service (contract DPoP section)
       - serviceAccount: payment-bulk-orchestration-service
         serviceId: svc-pay-bulk-orchestration
         sourceRepo: fintechbankx-lendingpayments-payment-orchestration-bulk-orchestration
+        apiPrefix: /open-finance/v1/file-payments   # TPP-facing, DPoP enforced by the service (contract DPoP section)
   - name: customer
     context: customer
     kind: service
@@ -108,7 +110,11 @@ namespaces:
       - serviceAccount: consent-authorization-service
         serviceId: svc-of-consent-authorization
         sourceRepo: fintechbankx-openfinance-consent-auth-service
-        apiPrefix: /open-finance/v1/consents
+        # TPP consents, the PSU authorization flow (/oauth2) and the
+        # first-party consent actions (/api/v1/consents/{id}/authorize|revoke);
+        # GET /api/v1/consents/{id} is the in-cluster service view (no gateway
+        # ALLOW) and /internal/v1 is never routed. Consent PR #13 a81579a.
+        apiPrefix: [/open-finance/v1/consents, /oauth2, /api/v1/consents]
         datastores: [aurora-postgresql, msk]
       - serviceAccount: payee-verification-service
         serviceId: svc-of-payee-verification
@@ -402,6 +408,28 @@ edges:
     port: 8080
     paths: [/open-finance/v1/consents, /open-finance/v1/consents/*]
     evidence: confirmed by service thread 2026-10-08; ConsentController /open-finance/v1/consents
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/consent-authorization-service
+    port: 8080
+    methods: [GET, POST]
+    paths: [/oauth2/authorize, /oauth2/token]
+    evidence: consent PR #13 a81579a PkceAuthorizationController GET /oauth2/authorize, POST /oauth2/token (PSU authorization flow)
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/consent-authorization-service
+    port: 8080
+    methods: [POST, PATCH]
+    paths: ["/api/v1/consents/{*}/authorize", "/api/v1/consents/{*}/revoke"]
+    evidence: consent PR #13 a81579a FirstPartyConsentController (first-party web/mobile, Keycloak token checked by the service)
+  - from: istio-ingress/istio-ingressgateway
+    to: payments/payment-recurring-mandates-service
+    port: 8080
+    paths: [/open-finance/v1/vrp/payment-consents, /open-finance/v1/vrp/payment-consents/*, /open-finance/v1/vrp/payments, /open-finance/v1/vrp/payments/*]
+    evidence: recurring-mandates PR #13 f8bc1b0 @RequestMapping("/open-finance/v1/vrp"); TPP-facing, DPoP, aud svc-pay-recurring-mandates
+  - from: istio-ingress/istio-ingressgateway
+    to: payments/payment-bulk-orchestration-service
+    port: 8080
+    paths: [/open-finance/v1/file-payments, /open-finance/v1/file-payments/*]
+    evidence: bulk orchestration PR #13 1ab37d2 @RequestMapping("/open-finance/v1/file-payments"); TPP-facing, DPoP
   - from: istio-ingress/istio-ingressgateway
     to: open-finance/payee-verification-service
     port: 8080
@@ -730,11 +758,10 @@ gaps:
     evidence: >-
       Edges confirmed by the service threads but no adapter exists yet; the
       ALLOW rules are port-only (8080) until methods and paths are known.
-  - from: payments request-to-pay, recurring-mandates, bulk-orchestration
-    to: ingress routes, datastores, call edges
+  - from: payments/payment-request-to-pay-service
+    to: ingress gateway route
     evidence: >-
-      Only the service accounts are confirmed (plus their GET calls to
-      consent-auth); they get identity, telemetry and scraping edges. Their controllers (main) expose /api/v1/pay-requests,
-      /open-finance/v1/vrp, /open-finance/v1/file-payments and copies of
-      /open-finance/v1/{accounts,consents,loans}, which overlap open-finance
-      routes, so no gateway route is added until the owners confirm them.
+      Request-to-pay's gateway route (/api/v1/pay-requests on main) waits for
+      its owner to confirm it. Mandates (/open-finance/v1/vrp) and bulk
+      (/open-finance/v1/file-payments) are routed since their PR #13 heads
+      dropped the copies of open-finance routes.

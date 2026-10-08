@@ -428,7 +428,7 @@ function ingressRouting(contract) {
     .filter((w) => w.apiPrefix)
     .map((w) => ({
       name: w.serviceId,
-      match: [{ uri: { prefix: w.apiPrefix } }],
+      match: [w.apiPrefix].flat().map((prefix) => ({ uri: { prefix } })),
       route: [{ destination: { host: `${w.serviceAccount}.${w.ns}.svc.cluster.local`, port: { number: contract.ports.http } } }],
       headers: forwardedHeaders('API_HOST'),
     }));
