@@ -55,6 +55,14 @@ meshConfig:
   # deploy/kustomize) are reachable; everything else is blackholed.
   outboundTrafficPolicy:
     mode: REGISTRY_ONLY
+  # BASE normalization (RFC 3986 dot segments) plus collapsing "//", applied
+  # before routing and before AuthorizationPolicy is evaluated. The gateway's
+  # notPaths exclusions rely on it: /api/v1/risk//assess is compared as
+  # /api/v1/risk/assess. Trailing slashes are not rewritten by any mode; the
+  # renderer adds "<path>/*" (or "<template>/" and "<template>/{**}")
+  # companions for every notPath instead (tests/path-normalization.test.mjs).
+  pathNormalization:
+    normalization: MERGE_SLASHES
   accessLogFile: /dev/stdout
   accessLogEncoding: JSON
   # Sidecar agent serves app + Envoy metrics on 15020 (/stats/prometheus);

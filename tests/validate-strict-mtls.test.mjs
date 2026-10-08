@@ -277,10 +277,14 @@ test('gateway: service-only operations are not reachable from the ingress gatewa
       .doc.spec.rules.map((r) => r.to[0].operation);
   assert.deepEqual(gwOps('customer', 'allow-from-istio-ingress-istio-ingressgateway-to-customer-profile-kyc-service')[0].notPaths, [
     '/api/v1/customers/{*}/credit/reserve',
+    '/api/v1/customers/{*}/credit/reserve/',
+    '/api/v1/customers/{*}/credit/reserve/{**}',
     '/api/v1/customers/{*}/credit/release',
+    '/api/v1/customers/{*}/credit/release/',
+    '/api/v1/customers/{*}/credit/release/{**}',
   ]);
-  assert.deepEqual(gwOps('risk', 'allow-from-istio-ingress-istio-ingressgateway-to-risk-decisioning-service')[0].notPaths, ['/api/v1/risk/assess']);
-  assert.deepEqual(gwOps('compliance', 'allow-from-istio-ingress-istio-ingressgateway-to-compliance-evidence-service')[0].notPaths, ['/api/v1/compliance/screen']);
+  assert.deepEqual(gwOps('risk', 'allow-from-istio-ingress-istio-ingressgateway-to-risk-decisioning-service')[0].notPaths, ['/api/v1/risk/assess', '/api/v1/risk/assess/*']);
+  assert.deepEqual(gwOps('compliance', 'allow-from-istio-ingress-istio-ingressgateway-to-compliance-evidence-service')[0].notPaths, ['/api/v1/compliance/screen', '/api/v1/compliance/screen/*']);
   const admin = gwOps('identity', 'allow-from-customer-customer-profile-kyc-service-to-keycloak');
   assert.ok(admin.some((o) => o.methods?.includes('PUT') && o.paths.includes('/admin/realms/fintechbankx/users/*')));
 });

@@ -117,6 +117,21 @@ function policyName(from) {
   return `allow-from-${from.ns}-${from.sa}`;
 }
 
+// meshConfig.pathNormalization MERGE_SLASHES collapses "//" before
+// AuthorizationPolicy evaluation, but no mode removes a trailing slash, so
+// every exclusion also excludes its trailing-slash and sub-path variants:
+// "<path>/*" for a literal path ("*" suffix is a prefix match and covers
+// "<path>/"), "<template>/" and "<template>/{**}" for a path template (a "*"
+// segment is not valid inside a template).
+export function withSubpathExclusions(notPaths) {
+  const out = [];
+  for (const p of notPaths) {
+    const extra = p.endsWith('*') || p.endsWith('/') ? [] : p.includes('{') ? [`${p}/`, `${p}/{**}`] : [`${p}/*`];
+    for (const x of [p, ...extra]) if (!out.includes(x)) out.push(x);
+  }
+  return out;
+}
+
 function authorizationPolicies(contract) {
   const docs = [];
   const gw = contract.gateway;
@@ -158,7 +173,7 @@ function authorizationPolicies(contract) {
     const op = { ports: [String(e.port)] };
     if (e.methods) op.methods = e.methods;
     if (e.paths) op.paths = e.paths;
-    if (e.notPaths) op.notPaths = e.notPaths;
+    if (e.notPaths) op.notPaths = withSubpathExclusions(e.notPaths);
     g.ops.push(op);
     if (e.evidence) g.evidence.push(e.evidence);
   }

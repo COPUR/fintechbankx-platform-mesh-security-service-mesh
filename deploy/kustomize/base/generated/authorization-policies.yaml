@@ -148,6 +148,7 @@ spec:
               - /api/v1/compliance/*
             notPaths:
               - /api/v1/compliance/screen
+              - /api/v1/compliance/screen/*
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -225,7 +226,11 @@ spec:
               - /api/v1/customers/*
             notPaths:
               - /api/v1/customers/{*}/credit/reserve
+              - /api/v1/customers/{*}/credit/reserve/
+              - /api/v1/customers/{*}/credit/reserve/{**}
               - /api/v1/customers/{*}/credit/release
+              - /api/v1/customers/{*}/credit/release/
+              - /api/v1/customers/{*}/credit/release/{**}
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -3289,6 +3294,7 @@ spec:
               - /api/v1/risk/*
             notPaths:
               - /api/v1/risk/assess
+              - /api/v1/risk/assess/*
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
