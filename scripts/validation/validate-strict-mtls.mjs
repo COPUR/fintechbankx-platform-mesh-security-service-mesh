@@ -29,7 +29,8 @@
 //     reads only <env>/<slug>/ keys (service namespaces: slug = its
 //     app.kubernetes.io/name label, one of the namespace's service accounts);
 //     the ValidatingAdmissionPolicy enforcing this at admission exists with a
-//     Deny binding. Static checks only: the CEL itself runs in the apiserver.
+//     Deny binding. Static checks only; tests/externalsecret-admission-
+//     cel.test.mjs evaluates the policy's CEL with cel-go.
 //  R11 no ALLOW rule into open-finance/consent-authorization-service without
 //     paths (port-only or from-only rules reach /internal/v1 and
 //     /oauth2/token), including selector-less ALLOWs in open-finance; and no

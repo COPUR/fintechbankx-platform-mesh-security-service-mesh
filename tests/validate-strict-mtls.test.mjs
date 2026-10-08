@@ -371,8 +371,9 @@ test('consent: every rule into consent-auth names its paths (no port-only access
 // ------------------------------------------------------------------ secrets (R10)
 // These tests check the manifests' structure (store conditions, which store
 // each ExternalSecret uses, the admission policy's match and expressions) and
-// the validator's static ExternalSecret check. They do NOT execute the CEL of
-// the ValidatingAdmissionPolicy; that needs a kube-apiserver.
+// the validator's static ExternalSecret check. The CEL of the
+// ValidatingAdmissionPolicy is executed with cel-go in
+// tests/externalsecret-admission-cel.test.mjs.
 const SVC_STORE = 'aws-secrets-manager';
 const PF_STORE = 'aws-secrets-manager-platform';
 const store = (docs, name) => docs.find((d) => d.doc.kind === 'ClusterSecretStore' && d.doc.metadata.name === name);
