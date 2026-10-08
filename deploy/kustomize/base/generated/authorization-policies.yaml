@@ -2730,6 +2730,10 @@ spec:
         - operation:
             ports:
               - "8080"
+            methods:
+              - GET
+            paths:
+              - /api/v1/consents/*
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -2752,6 +2756,58 @@ spec:
         - operation:
             ports:
               - "8080"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-payments-payment-recurring-mandates-service-to-consent-authorization-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: confirmed by the open finance thread 2026-10-08 (consent GET /api/v1/consents/{id}, azp allow-list); caller adapter not yet confirmed
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: consent-authorization-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-recurring-mandates-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /api/v1/consents/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-payments-payment-request-to-pay-service-to-consent-authorization-service
+  namespace: open-finance
+  annotations:
+    fintechbankx.io/evidence: confirmed by the open finance thread 2026-10-08 (consent GET /api/v1/consents/{id}, azp allow-list); caller adapter not yet confirmed
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: consent-authorization-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-request-to-pay-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /api/v1/consents/*
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy

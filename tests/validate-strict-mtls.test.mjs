@@ -144,6 +144,8 @@ test('contract: east-west service edges are exactly the confirmed ones and scope
     'payments/payment-initiation-settlement-service->open-finance/consent-authorization-service',
     'payments/payment-initiation-settlement-service->open-finance/payee-verification-service',
     'payments/payment-initiation-settlement-service->risk/risk-decisioning-service',
+    'payments/payment-recurring-mandates-service->open-finance/consent-authorization-service',
+    'payments/payment-request-to-pay-service->open-finance/consent-authorization-service',
   ]);
   for (const e of eastWest) {
     assert.ok(
@@ -196,6 +198,8 @@ test('contract: open-finance keeps its documented token exception and is still d
     'cluster.local/ns/observability/sa/prometheus',
     'cluster.local/ns/payments/sa/payment-bulk-orchestration-service',
     'cluster.local/ns/payments/sa/payment-initiation-settlement-service',
+    'cluster.local/ns/payments/sa/payment-recurring-mandates-service',
+    'cluster.local/ns/payments/sa/payment-request-to-pay-service',
   ]);
 });
 

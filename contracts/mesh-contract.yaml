@@ -443,8 +443,21 @@ edges:
   - from: payments/payment-bulk-orchestration-service
     to: open-finance/consent-authorization-service
     port: 8080
-    scope: port-only
-    evidence: confirmed by the lending and payments thread 2026-10-08 (bulk orchestration draft PR #13, client-credentials call to consent-auth); paths not yet confirmed
+    methods: [GET]
+    paths: [/api/v1/consents/*]
+    evidence: confirmed by the lending and payments thread 2026-10-08 (bulk orchestration draft PR #13) and the open finance thread (consent GET /api/v1/consents/{id}, azp allow-list)
+  - from: payments/payment-request-to-pay-service
+    to: open-finance/consent-authorization-service
+    port: 8080
+    methods: [GET]
+    paths: [/api/v1/consents/*]
+    evidence: confirmed by the open finance thread 2026-10-08 (consent GET /api/v1/consents/{id}, azp allow-list); caller adapter not yet confirmed
+  - from: payments/payment-recurring-mandates-service
+    to: open-finance/consent-authorization-service
+    port: 8080
+    methods: [GET]
+    paths: [/api/v1/consents/*]
+    evidence: confirmed by the open finance thread 2026-10-08 (consent GET /api/v1/consents/{id}, azp allow-list); caller adapter not yet confirmed
 
   # Every Spring resource server fetches the realm JWKS (OIDC_JWK_SET_URI);
   # client-credentials token exchange per platform contract.
@@ -706,8 +719,8 @@ gaps:
   - from: payments request-to-pay, recurring-mandates, bulk-orchestration
     to: ingress routes, datastores, call edges
     evidence: >-
-      Only the service accounts are confirmed (plus bulk-orchestration's
-      call to consent-auth); they get identity, telemetry and scraping edges. Their controllers (main) expose /api/v1/pay-requests,
+      Only the service accounts are confirmed (plus their GET calls to
+      consent-auth); they get identity, telemetry and scraping edges. Their controllers (main) expose /api/v1/pay-requests,
       /open-finance/v1/vrp, /open-finance/v1/file-payments and copies of
       /open-finance/v1/{accounts,consents,loans}, which overlap open-finance
       routes, so no gateway route is added until the owners confirm them.
