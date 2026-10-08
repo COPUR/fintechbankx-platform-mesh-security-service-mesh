@@ -432,6 +432,12 @@ edges:
     paths: ["/api/v1/consents/{*}/authorize", "/api/v1/consents/{*}/revoke"]
     evidence: consent PR #13 a81579a FirstPartyConsentController (first-party web/mobile, Keycloak token checked by the service)
   - from: istio-ingress/istio-ingressgateway
+    to: open-finance/consent-authorization-service
+    port: 8080
+    methods: [GET]
+    paths: [/api/v1/consents]
+    evidence: open finance thread 2026-10-08 - first-party GET /api/v1/consents (the PSU's own consents); GET /api/v1/consents/{id} stays in-cluster
+  - from: istio-ingress/istio-ingressgateway
     to: payments/payment-recurring-mandates-service
     port: 8080
     paths: [/open-finance/v1/vrp/payment-consents, /open-finance/v1/vrp/payment-consents/*, /open-finance/v1/vrp/payments, /open-finance/v1/vrp/payments/*]

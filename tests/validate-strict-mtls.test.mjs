@@ -289,7 +289,7 @@ test('gateway: TPP payment APIs and the consent authorization flow are routed an
       .find((d) => d.doc.kind === 'AuthorizationPolicy' && d.doc.metadata.namespace === ns && d.doc.metadata.name === name)
       .doc.spec.rules.flatMap((r) => r.to.flatMap((t) => t.operation.paths || []));
   const consent = paths('open-finance', 'allow-from-istio-ingress-istio-ingressgateway-to-consent-authorization-service');
-  for (const p of ['/oauth2/authorize', '/oauth2/token', '/api/v1/consents/{*}/authorize', '/api/v1/consents/{*}/revoke']) assert.ok(consent.includes(p), p);
+  for (const p of ['/oauth2/authorize', '/oauth2/token', '/api/v1/consents', '/api/v1/consents/{*}/authorize', '/api/v1/consents/{*}/revoke']) assert.ok(consent.includes(p), p);
   assert.ok(!consent.includes('/api/v1/consents/*'), 'service view GET /api/v1/consents/{id} stays in-cluster');
   assert.ok(paths('payments', 'allow-from-istio-ingress-istio-ingressgateway-to-payment-recurring-mandates-service').includes('/open-finance/v1/vrp/payments/*'));
   assert.ok(paths('payments', 'allow-from-istio-ingress-istio-ingressgateway-to-payment-bulk-orchestration-service').includes('/open-finance/v1/file-payments/*'));

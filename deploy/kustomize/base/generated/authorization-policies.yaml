@@ -2681,7 +2681,7 @@ metadata:
   name: allow-from-istio-ingress-istio-ingressgateway-to-consent-authorization-service
   namespace: open-finance
   annotations:
-    fintechbankx.io/evidence: confirmed by service thread 2026-10-08; ConsentController /open-finance/v1/consents | consent PR
+    fintechbankx.io/evidence: confirmed by service thread 2026-10-08; ConsentController /open-finance/v1/consents | consent PR | open finance thread 2026-10-08 - first-party GET /api/v1/consents (the PSU's own consents); GET /api/v1/consents/{id} stays in-cluster
 spec:
   selector:
     matchLabels:
@@ -2727,6 +2727,18 @@ spec:
             paths:
               - /api/v1/consents/{*}/authorize
               - /api/v1/consents/{*}/revoke
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /api/v1/consents
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
