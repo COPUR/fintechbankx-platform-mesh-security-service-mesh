@@ -17,13 +17,13 @@ replacements:
       - select: {kind: Gateway, name: fintechbankx-public}
         fieldPaths: [spec.servers.0.hosts.1, spec.servers.1.hosts.1]
       - select: {kind: VirtualService, name: fintechbankx-identity}
-        fieldPaths: [spec.hosts.0]
+        fieldPaths: [spec.hosts.0, "spec.http.*.headers.request.set.x-forwarded-host"]
   - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.API_HOST}
     targets:
       - select: {kind: Gateway, name: fintechbankx-public}
         fieldPaths: [spec.servers.0.hosts.0, spec.servers.1.hosts.0]
       - select: {kind: VirtualService, name: fintechbankx-api}
-        fieldPaths: [spec.hosts.0]
+        fieldPaths: [spec.hosts.0, "spec.http.*.headers.request.set.x-forwarded-host"]
   # CIDRs -> NetworkPolicy ipBlocks and the Aurora ServiceEntry address.
   - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.VPC_CIDR}
     targets:
