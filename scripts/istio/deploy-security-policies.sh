@@ -1,4 +1,7 @@
 #!/bin/bash
+# DEPRECATED (monolith extraction seed): references monorepo-only files under
+# k8s/istio/*.yaml and the single 'banking' namespace. Use
+# scripts/istio/install-mesh.sh with deploy/ instead. Kept for history only.
 
 # Enterprise Banking Istio Security Policies Deployment Script
 # mTLS, RBAC, and Network Policies for Banking Compliance
@@ -318,7 +321,7 @@ spec:
   serviceAccountName: loan-service
   containers:
   - name: test
-    image: curlimages/curl:latest
+    image: curlimages/curl:8.10.1
     command: ["sleep", "3600"]
 EOF
 
@@ -334,7 +337,7 @@ metadata:
 spec:
   containers:
   - name: test
-    image: curlimages/curl:latest
+    image: curlimages/curl:8.10.1
     command: ["sleep", "3600"]
 EOF
 

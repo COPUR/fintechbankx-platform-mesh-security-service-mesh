@@ -1,0 +1,3 @@
+# staging: production shape with a lower ceiling.
+autoscaling:
+  maxReplicas: 6

@@ -1,0 +1,10 @@
+# dev: two istiod replicas (still survives one node or zone loss).
+autoscaleMin: 2
+autoscaleMax: 3
+replicaCount: 2
+resources:
+  requests:
+    cpu: 250m
+    memory: 1Gi
+  limits:
+    memory: 2Gi

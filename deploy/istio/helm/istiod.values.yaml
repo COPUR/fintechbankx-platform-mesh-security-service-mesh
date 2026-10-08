@@ -1,0 +1,76 @@
+# istio/istiod 1.24.3 - control plane, production-shaped defaults (Proposed).
+# Environment files under env/<env>/ override replica counts and resources.
+
+# HA: three replicas spread over zones, HPA 3..6, PDB (chart default minAvailable 1).
+autoscaleEnabled: true
+autoscaleMin: 3
+autoscaleMax: 6
+replicaCount: 3
+rollingMaxSurge: 1
+rollingMaxUnavailable: 0
+cpu:
+  targetAverageUtilization: 70
+resources:
+  requests:
+    cpu: 500m
+    memory: 2Gi
+  limits:
+    memory: 4Gi
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        app: istiod
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app: istiod
+env:
+  # istiod fetches the Keycloak JWKS itself and pushes it to proxies.
+  PILOT_JWT_ENABLE_REMOTE_JWKS: "false"
+
+global:
+  # Mirror docker.io/istio images into ECR and set hub here for production.
+  hub: docker.io/istio
+  tag: 1.24.3
+  logAsJson: true
+  defaultPodDisruptionBudget:
+    enabled: true
+  proxy:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+    holdApplicationUntilProxyStarts: true
+
+meshConfig:
+  trustDomain: cluster.local
+  # Only hosts in the registry (Kubernetes services + ServiceEntries in
+  # deploy/kustomize) are reachable; everything else is blackholed.
+  outboundTrafficPolicy:
+    mode: REGISTRY_ONLY
+  accessLogFile: /dev/stdout
+  accessLogEncoding: JSON
+  enablePrometheusMerge: true
+  defaultConfig:
+    holdApplicationUntilProxyStarts: true
+    proxyMetadata:
+      ISTIO_META_DNS_CAPTURE: "true"
+      ISTIO_META_DNS_AUTO_ALLOCATE: "true"
+  enableTracing: true
+  extensionProviders:
+    - name: otel-tracing
+      opentelemetry:
+        service: otel-collector.observability.svc.cluster.local
+        port: 4317
+  defaultProviders:
+    tracing:
+      - otel-tracing
+  localityLbSetting:
+    enabled: true

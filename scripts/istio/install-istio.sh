@@ -1,4 +1,7 @@
 #!/bin/bash
+# DEPRECATED (monolith extraction seed): references monorepo-only files under
+# k8s/istio/*.yaml and the single 'banking' namespace. Use
+# scripts/istio/install-mesh.sh with deploy/ instead. Kept for history only.
 
 # Enterprise Banking Istio Service Mesh Installation Script
 # Comprehensive setup for FAPI 2.0 compliant banking infrastructure
