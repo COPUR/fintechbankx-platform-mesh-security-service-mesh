@@ -1686,12 +1686,6 @@ spec:
               kubernetes.io/metadata.name: payments
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: payment-request-to-pay-service
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: payments
-          podSelector:
-            matchLabels:
               app.kubernetes.io/name: payment-recurring-mandates-service
       ports:
         - protocol: TCP

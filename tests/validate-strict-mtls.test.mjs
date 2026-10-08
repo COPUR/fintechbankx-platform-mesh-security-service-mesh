@@ -145,7 +145,6 @@ test('contract: east-west service edges are exactly the confirmed ones and scope
     'payments/payment-initiation-settlement-service->open-finance/payee-verification-service',
     'payments/payment-initiation-settlement-service->risk/risk-decisioning-service',
     'payments/payment-recurring-mandates-service->open-finance/consent-authorization-service',
-    'payments/payment-request-to-pay-service->open-finance/consent-authorization-service',
   ]);
   for (const e of eastWest) {
     assert.ok(
@@ -199,7 +198,6 @@ test('contract: open-finance keeps its documented token exception and is still d
     'cluster.local/ns/payments/sa/payment-bulk-orchestration-service',
     'cluster.local/ns/payments/sa/payment-initiation-settlement-service',
     'cluster.local/ns/payments/sa/payment-recurring-mandates-service',
-    'cluster.local/ns/payments/sa/payment-request-to-pay-service',
   ]);
 });
 
@@ -310,4 +308,41 @@ test('gateway: request-to-pay TPP paths, open-data rate limit and the RDS CA bun
   const bundle = docs.find((d) => d.doc.kind === 'Bundle' && d.doc.metadata.name === 'rds-ca-bundle').doc;
   assert.equal(bundle.spec.target.configMap.key, 'global-bundle.pem');
   assert.deepEqual(bundle.spec.sources, [{ configMap: { name: 'amazon-rds-ca-source', key: 'global-bundle.pem' } }]);
+});
+
+// Cartesian (method, path) pairs an ALLOW rule admits; a rule without methods admits every method ('*').
+const pairsOf = (op) => (op.methods || ['*']).flatMap((m) => (op.paths || ['*']).map((p) => `${m} ${p}`));
+
+test('consent: the gateway allows exactly the documented (method, path) pairs', () => {
+  const docs = deployable();
+  const ap = docs.find(
+    (d) => d.doc.kind === 'AuthorizationPolicy' && d.doc.metadata.namespace === 'open-finance' &&
+      d.doc.metadata.name === 'allow-from-istio-ingress-istio-ingressgateway-to-consent-authorization-service',
+  ).doc;
+  const pairs = ap.spec.rules.flatMap((r) => r.to.flatMap((t) => pairsOf(t.operation))).sort();
+  assert.deepEqual(pairs, [
+    '* /open-finance/v1/consents',
+    '* /open-finance/v1/consents/*',
+    'GET /api/v1/consents',
+    'GET /oauth2/authorize',
+    'PATCH /api/v1/consents/{*}/revoke',
+    'POST /api/v1/consents/{*}/authorize',
+    'POST /oauth2/token',
+  ]);
+  for (const bad of ['POST /oauth2/authorize', 'GET /oauth2/token', 'PATCH /api/v1/consents/{*}/authorize', 'POST /api/v1/consents/{*}/revoke']) {
+    assert.ok(!pairs.includes(bad), `${bad} must not be allowed`);
+  }
+});
+
+test('consent: the in-cluster GET /api/v1/consents/{id} view is open to bulk and recurring mandates only', () => {
+  const docs = deployable();
+  const callers = docs
+    .filter((d) => d.doc.kind === 'AuthorizationPolicy' && d.doc.metadata.namespace === 'open-finance' && /-to-consent-authorization-service$/.test(d.doc.metadata.name))
+    .flatMap((d) => d.doc.spec.rules)
+    .filter((r) => r.to.some((t) => (t.operation.paths || []).includes('/api/v1/consents/*')))
+    .flatMap((r) => r.from.flatMap((f) => f.source.principals));
+  assert.deepEqual(callers.sort(), [
+    'cluster.local/ns/payments/sa/payment-bulk-orchestration-service',
+    'cluster.local/ns/payments/sa/payment-recurring-mandates-service',
+  ]);
 });

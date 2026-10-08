@@ -419,18 +419,33 @@ edges:
     port: 8080
     paths: [/open-finance/v1/consents, /open-finance/v1/consents/*]
     evidence: confirmed by service thread 2026-10-08; ConsentController /open-finance/v1/consents
+  # One edge per (method, path) pair: an Istio operation ANDs its methods and
+  # paths as sets, so [GET, POST] x [authorize, token] would also allow
+  # POST /oauth2/authorize and GET /oauth2/token (security review 2026-10-08).
   - from: istio-ingress/istio-ingressgateway
     to: open-finance/consent-authorization-service
     port: 8080
-    methods: [GET, POST]
-    paths: [/oauth2/authorize, /oauth2/token]
-    evidence: consent PR #13 a81579a PkceAuthorizationController GET /oauth2/authorize, POST /oauth2/token (PSU authorization flow)
+    methods: [GET]
+    paths: [/oauth2/authorize]
+    evidence: consent PR #13 a81579a PkceAuthorizationController GET /oauth2/authorize (PSU authorization flow)
   - from: istio-ingress/istio-ingressgateway
     to: open-finance/consent-authorization-service
     port: 8080
-    methods: [POST, PATCH]
-    paths: ["/api/v1/consents/{*}/authorize", "/api/v1/consents/{*}/revoke"]
-    evidence: consent PR #13 a81579a FirstPartyConsentController (first-party web/mobile, Keycloak token checked by the service)
+    methods: [POST]
+    paths: [/oauth2/token]
+    evidence: consent PR #13 a81579a PkceAuthorizationController POST /oauth2/token (PSU authorization flow)
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/consent-authorization-service
+    port: 8080
+    methods: [POST]
+    paths: ["/api/v1/consents/{*}/authorize"]
+    evidence: consent PR #13 a81579a FirstPartyConsentController POST /api/v1/consents/{id}/authorize (first-party web/mobile, Keycloak token checked by the service)
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/consent-authorization-service
+    port: 8080
+    methods: [PATCH]
+    paths: ["/api/v1/consents/{*}/revoke"]
+    evidence: consent PR #13 a81579a FirstPartyConsentController PATCH /api/v1/consents/{id}/revoke (first-party web/mobile, Keycloak token checked by the service)
   - from: istio-ingress/istio-ingressgateway
     to: open-finance/consent-authorization-service
     port: 8080
@@ -501,12 +516,10 @@ edges:
     methods: [GET]
     paths: [/api/v1/consents/*]
     evidence: confirmed by the lending and payments thread 2026-10-08 (bulk orchestration draft PR #13) and the open finance thread (consent GET /api/v1/consents/{id}, azp allow-list)
-  - from: payments/payment-request-to-pay-service
-    to: open-finance/consent-authorization-service
-    port: 8080
-    methods: [GET]
-    paths: [/api/v1/consents/*]
-    evidence: confirmed by the open finance thread 2026-10-08 (consent GET /api/v1/consents/{id}, azp allow-list); caller adapter not yet confirmed
+  # GET /api/v1/consents/{id} (the in-cluster consent view) is open to bulk
+  # orchestration and recurring mandates only (security review 2026-10-08).
+  # request-to-pay has no confirmed caller adapter, so it gets no edge; add
+  # it back with evidence when one exists.
   - from: payments/payment-recurring-mandates-service
     to: open-finance/consent-authorization-service
     port: 8080
