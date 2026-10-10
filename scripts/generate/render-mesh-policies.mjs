@@ -23,6 +23,7 @@ import {
   isMigrationJob,
   isGuardCheckJob,
   isJobWorkload,
+  isSidecarLessJob,
   COMPONENT_LABEL,
   SERVICE_COMPONENT,
   MIGRATION_COMPONENT,
@@ -751,7 +752,7 @@ const nsSel = (ns) => ({ namespaceSelector: { matchLabels: { 'kubernetes.io/meta
 
 // Can this pod selector match a pod with these name/component labels? Keys
 // other than name and component are ignored (assumed to match), so a
-// selector that might select a guard-check pod counts as selecting it.
+// selector that might select a sidecar-less Job pod counts as selecting it.
 function mayMatch(selector, labels) {
   for (const [k, v] of Object.entries(selector.matchLabels || {})) if (k in labels && labels[k] !== v) return false;
   for (const e of selector.matchExpressions || []) {
@@ -763,17 +764,22 @@ function mayMatch(selector, labels) {
   return true;
 }
 
-// Guard-check pods (role history-guard-check) run without a sidecar: they get
-// DNS and their service's Aurora egress and nothing else. Every other policy
-// of the namespace that may select them (namespace-wide, or keyed on their
-// service's name) excludes their component. Namespaces without a guard check
-// are unchanged.
-function guardExclusion(contract, n) {
-  const guards = (n.workloads || []).filter(isGuardCheckJob).map((w) => resolveWorkload(contract, n.name, w.name).selector);
-  const components = [...new Set(guards.map((g) => g[COMPONENT_LABEL]))].sort();
-  return (selector) => {
-    if (!guards.some((g) => mayMatch(selector, g))) return selector;
+// Sidecar-less Job pods (role db-migration or history-guard-check with
+// sidecar: false) get DNS and the stores their Job declares (Aurora) and
+// nothing else. Every other policy of the namespace that may select them
+// (namespace-wide, or keyed on their service's name) excludes their
+// component (NotIn); a store policy excludes only the Jobs that do not
+// declare that store. Policies no such Job could match, and namespaces
+// without one, are unchanged.
+function sidecarLessJobExclusion(contract, n) {
+  const jobs = (n.workloads || [])
+    .filter(isSidecarLessJob)
+    .map((w) => ({ selector: resolveWorkload(contract, n.name, w.name || w.serviceAccount).selector, stores: w.datastores || [] }));
+  return (selector, store) => {
+    const hit = jobs.filter((j) => !(store && j.stores.includes(store)) && mayMatch(selector, j.selector));
+    if (!hit.length) return selector;
     const out = structuredClone(selector);
+    const components = [...new Set(hit.map((j) => j.selector[COMPONENT_LABEL]))].sort();
     out.matchExpressions = [...(out.matchExpressions || []), { key: COMPONENT_LABEL, operator: 'NotIn', values: components }];
     return out;
   };
@@ -796,7 +802,7 @@ function networkPolicies(contract) {
   for (const n of contract.namespaces) {
     if (isException(contract, 'networkPolicyDefaultDeny', n.name)) continue;
     const ns = n.name;
-    const narrow = guardExclusion(contract, n);
+    const narrow = sidecarLessJobExclusion(contract, n);
     docs.push(np(ns, 'default-deny-all', { podSelector: {}, policyTypes: ['Ingress', 'Egress'] }));
     docs.push(
       np(ns, 'allow-egress-dns', {
@@ -858,8 +864,8 @@ function networkPolicies(contract) {
     // Aurora (and the other stores) select on app.kubernetes.io/name only, so
     // a service's Flyway migration Job pods (same name, component
     // db-migration) reach its database. MSK also requires component=service:
-    // a migration Job never reaches the brokers. A guard check reaches only
-    // the stores it declares (Aurora); any other store policy excludes it.
+    // a migration Job never reaches the brokers. A sidecar-less Job reaches
+    // only the stores it declares (Aurora); any other store policy excludes it.
     const x = contract.externalDependencies;
     const storePorts = {
       'aurora-postgresql': ['allow-egress-aurora', [x['aurora-postgresql'].port]],
@@ -884,10 +890,9 @@ function networkPolicies(contract) {
       if (!users.length) continue;
       const matchExpressions = [{ key: 'app.kubernetes.io/name', operator: 'In', values: [...new Set(users)].sort() }];
       if (store === 'msk') matchExpressions.push({ key: COMPONENT_LABEL, operator: 'In', values: [SERVICE_COMPONENT] });
-      const guardsStore = (n.workloads || []).some((w) => isGuardCheckJob(w) && (w.datastores || []).includes(store));
       docs.push(
         np(ns, name, {
-          podSelector: guardsStore ? { matchExpressions } : narrow({ matchExpressions }),
+          podSelector: narrow({ matchExpressions }, store),
           policyTypes: ['Egress'],
           egress: [{ to: [{ ipBlock: { cidr: cidr || PLACEHOLDER_CIDR } }], ports: tcp(ports) }],
         }),
@@ -1154,7 +1159,9 @@ function externalSecretAdmission(contract) {
 // A `role: db-migration` workload is a service's Flyway migration Job (Helm
 // pre-install/pre-upgrade hook) with a service account of its own. Its pods
 // carry the service's app.kubernetes.io/name and component db-migration, so
-// it shares the service's name-keyed Aurora egress and nothing else.
+// it shares the service's name-keyed Aurora egress; without a sidecar every
+// other policy that could select it excludes the component
+// (sidecarLessJobExclusion).
 const MIGRATION_STORES = new Set(['aurora-postgresql']);
 
 export function checkMigrationJobs(contract) {
@@ -1170,7 +1177,11 @@ export function checkMigrationJobs(contract) {
         throw new Error(`${ref}: selector must be exactly ${JSON.stringify(want)}`);
       }
       if (w.service !== null) throw new Error(`${ref}: a migration Job has no Service (service: null)`);
-      if (w.sidecar === false) throw new Error(`${ref}: a migration Job runs with a (native) sidecar`);
+      if (w.destinationRule !== false) throw new Error(`${ref}: a migration Job is no callee (destinationRule: false)`);
+      // false: no sidecar (R9 exception; DNS and Aurora only). Absent: native sidecar (also istiod).
+      if (w.sidecar !== undefined && w.sidecar !== false) {
+        throw new Error(`${ref}: a migration Job declares sidecar: false or absent (native sidecar), got ${JSON.stringify(w.sidecar)}`);
+      }
       for (const k of ['apiPrefix', 'serviceId']) {
         if (w[k] !== undefined) throw new Error(`${ref}: a migration Job takes no inbound traffic (${k})`);
       }
@@ -1192,7 +1203,7 @@ export function checkMigrationJobs(contract) {
 // carry the service's app.kubernetes.io/name and component
 // history-guard-check, run without a sidecar (exceptions.workloadInjection,
 // validator R9) and share the service's name-keyed Aurora egress; every other
-// policy that could select them excludes the component (guardExclusion).
+// policy that could select them excludes the component (sidecarLessJobExclusion).
 const GUARD_CHECK_STORES = new Set(['aurora-postgresql']);
 
 export function checkGuardCheckJobs(contract) {

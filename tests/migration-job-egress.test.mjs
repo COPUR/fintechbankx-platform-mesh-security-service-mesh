@@ -5,9 +5,10 @@
 //  - allow-egress-msk selects name AND component=service, so no migration pod
 //    (and no pod without the component label) reaches the brokers;
 //  - allow-egress-aurora selects the name only, so the migration pod does;
-//  - compliance-evidence-service-db-migration (own ServiceAccount) is a
-//    workload of its own: no RequestAuthentication, no AuthorizationPolicy,
-//    no secret slug, and the renderer refuses MSK, edges or a loose selector.
+//  - compliance-evidence-service-db-migration (own ServiceAccount, no
+//    sidecar) is a workload of its own: no RequestAuthentication, no
+//    AuthorizationPolicy, no secret slug, and the renderer refuses MSK, edges
+//    or a loose selector.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -84,17 +85,13 @@ test('the compliance migration Job pod reaches Aurora and never MSK', () => {
   assert.ok(job, 'compliance-evidence-service-db-migration is in the mesh contract');
   assert.equal(job.role, 'db-migration');
   const labels = { ...job.selector, 'app.kubernetes.io/instance': 'compliance-evidence-service' };
+  // Sidecar-less (CRC chart sets sidecar.istio.io/inject "false"): DNS and
+  // the service's Aurora only; every other compliance policy that could
+  // select it excludes component db-migration
+  // (tests/sidecarless-migration-job-egress.test.mjs).
   assert.deepEqual(egressPoliciesSelecting('compliance', labels), [
     'allow-egress-aurora',
-    // The service's edge egress keys on its name label only, so it selects the
-    // Job pod at L3/L4 too; no AuthorizationPolicy admits the Job's principal
-    // (next test), so Keycloak and the collector reject it. Narrowing these
-    // to component=service waits for every chart to carry the label.
-    'allow-egress-compliance-evidence-service-to-identity',
-    'allow-egress-compliance-evidence-service-to-observability',
     'allow-egress-dns',
-    'allow-egress-istiod',
-    'allow-egress-vpc-https', // namespace-wide (podSelector {}), not specific to the Job
     'default-deny-all',
   ]);
   assert.ok(!egressPoliciesSelecting('compliance', labels).includes('allow-egress-msk'));

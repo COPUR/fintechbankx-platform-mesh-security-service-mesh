@@ -174,6 +174,35 @@ namespaces:
         sourceRepo: fintechbankx-customer-profile-kyc-core
         apiPrefix: /api/v1/customers
         datastores: [aurora-postgresql, msk]
+      # Flyway migration Job (Helm pre-install/pre-upgrade hook), branch
+      # claude/customer-risk-compliance-deployable-ygi0zo 90b88d8:
+      # deploy/helm/customer-profile-kyc-service/templates/migration-job.yaml:39-49,
+      # _helpers.tpl:39-47, values.yaml:21-25 (podLabels add app:
+      # customer-profile-kyc-service, part-of, service-id).
+      # Pod labels (the chart's migrationSelectorLabels): app.kubernetes.io/name
+      # <service>, instance <release>, component db-migration, plus podLabels
+      # without their inject key, then sidecar.istio.io/inject "false". Own
+      # ServiceAccount <service>-db-migration, no token, no IAM role. The
+      # instance label is the Helm release name, chosen per install, so the
+      # selector is name + component (the narrowest the labels allow). The
+      # mesh does not need the opt-out (native sidecars let a Job complete);
+      # it is the owner's choice, documented under exceptions.workloadInjection.
+      # DNS and the service's Aurora egress (name-keyed allow-egress-aurora,
+      # 5432 to AURORA_CIDR) only: every other policy of the namespace that
+      # could select the pods excludes component db-migration (no istiod, VPC
+      # endpoints, MSK, east-west or ingress). No principal, no Service, no
+      # call or telemetry edge, no secret slug.
+      - serviceAccount: customer-profile-kyc-service-db-migration
+        role: db-migration
+        migrates: customer-profile-kyc-service
+        sourceRepo: fintechbankx-customer-profile-kyc-core
+        selector:
+          app.kubernetes.io/name: customer-profile-kyc-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
   - name: risk
     context: risk
     kind: service
@@ -183,6 +212,22 @@ namespaces:
         sourceRepo: fintechbankx-riskcompliance-risk-decisioning-core
         apiPrefix: /api/v1/risk
         datastores: [aurora-postgresql, msk]
+      # Flyway migration Job (Helm pre-install/pre-upgrade hook), branch
+      # claude/customer-risk-compliance-deployable-ygi0zo 6edae99:
+      # deploy/helm/risk-decisioning-service/templates/migration-job.yaml:39-49,
+      # _helpers.tpl:34-42, values.yaml:16-19.
+      # Same labels, ServiceAccount and policy shape as the customer Job above.
+      - serviceAccount: risk-decisioning-service-db-migration
+        role: db-migration
+        migrates: risk-decisioning-service
+        sourceRepo: fintechbankx-riskcompliance-risk-decisioning-core
+        selector:
+          app.kubernetes.io/name: risk-decisioning-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
   - name: compliance
     context: compliance
     kind: service
@@ -192,14 +237,11 @@ namespaces:
         sourceRepo: fintechbankx-riskcompliance-compliance-evidence-core
         apiPrefix: /api/v1/compliance
         datastores: [aurora-postgresql, msk]
-      # Flyway migration Job (Helm pre-install/pre-upgrade hook, compliance
-      # chart templates/migration-job.yaml, branch
-      # claude/customer-risk-compliance-deployable-ygi0zo 1d1a5d2). Own
-      # ServiceAccount, no API token; its pods carry the service's
-      # app.kubernetes.io/name and component db-migration. Modelled on
-      # identity/keycloak-realm-import (native sidecar so the Job completes),
-      # but narrower: Aurora egress (name-keyed policy), DNS and istiod only;
-      # no MSK, no inbound, no call edge, no telemetry edge, no secret slug.
+      # Flyway migration Job (Helm pre-install/pre-upgrade hook), branch
+      # claude/customer-risk-compliance-deployable-ygi0zo 67c4cc1 (opt-out since
+      # 685c4aa): deploy/helm/compliance-evidence-service/templates/
+      # migration-job.yaml:39-49, _helpers.tpl:34-42, values.yaml:16-19.
+      # Same labels, ServiceAccount and policy shape as the customer Job above.
       - serviceAccount: compliance-evidence-service-db-migration
         role: db-migration
         migrates: compliance-evidence-service
@@ -207,6 +249,7 @@ namespaces:
         selector:
           app.kubernetes.io/name: compliance-evidence-service
           app.kubernetes.io/component: db-migration
+        sidecar: false
         service: null
         destinationRule: false
         datastores: [aurora-postgresql]
@@ -486,15 +529,45 @@ exceptions:
         Products history-guard verify CronJob and pre-upgrade gate Job
         (products PR #14). The products chart sets sidecar.istio.io/inject
         "false" on them; this mesh does not require it (istiod injects native
-        sidecars, so a Job completes with one, as the db-migration and
-        keycloak-realm-import Jobs do). Accepted as the owner's choice pending
-        the open-finance/products decision; if products drops the opt-out,
-        the pods run meshed like the migration Jobs (no ALLOW names them) and
-        this entry and the renderer's sidecar-less rule are revisited.
+        sidecars, so a Job completes with one, as the keycloak-realm-import
+        Job does). Accepted as the owner's choice pending the
+        open-finance/products decision; if products drops the opt-out, the
+        pods run meshed (no ALLOW names them) and this entry and the
+        renderer's sidecar-less rule are revisited.
         Scoped to pods labelled app.kubernetes.io/name
         open-products-catalog-service AND component history-guard-check: DNS
         and the products Aurora (5432) only, no ingress, no principal. The
         products Deployment keeps its sidecar.
+    - workload: customer/customer-profile-kyc-service-db-migration
+      reason: >-
+        Flyway migration Job of customer-profile-kyc-service (CRC branch
+        claude/customer-risk-compliance-deployable-ygi0zo 90b88d8, chart
+        templates/migration-job.yaml). The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the CRC
+        decision. Scoped to pods labelled app.kubernetes.io/name customer-profile-kyc-service
+        AND component db-migration: DNS and the customer Aurora (5432) only, no
+        ingress, no principal. The customer-profile-kyc-service Deployment keeps its sidecar.
+    - workload: risk/risk-decisioning-service-db-migration
+      reason: >-
+        Flyway migration Job of risk-decisioning-service (CRC branch
+        claude/customer-risk-compliance-deployable-ygi0zo 6edae99, chart
+        templates/migration-job.yaml). The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the CRC
+        decision. Scoped to pods labelled app.kubernetes.io/name risk-decisioning-service
+        AND component db-migration: DNS and the risk Aurora (5432) only, no
+        ingress, no principal. The risk-decisioning-service Deployment keeps its sidecar.
+    - workload: compliance/compliance-evidence-service-db-migration
+      reason: >-
+        Flyway migration Job of compliance-evidence-service (CRC branch
+        claude/customer-risk-compliance-deployable-ygi0zo 67c4cc1, chart
+        templates/migration-job.yaml). The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the CRC
+        decision. Scoped to pods labelled app.kubernetes.io/name compliance-evidence-service
+        AND component db-migration: DNS and the compliance Aurora (5432) only, no
+        ingress, no principal. The compliance-evidence-service Deployment keeps its sidecar.
   peerAuthentication: []          # no PERMISSIVE or DISABLE anywhere
   requestAuthentication:
     - namespace: open-finance
@@ -979,7 +1052,9 @@ externalDependencies:
   # allow-egress-msk selects app.kubernetes.io/name AND
   # app.kubernetes.io/component=service (the API pods); the other stores select
   # on the name only, so a service's migration Job pods (component
-  # db-migration) reach Aurora but never the brokers.
+  # db-migration) reach Aurora but never the brokers. In a namespace with a
+  # sidecar-less Job workload, the store policies its Job does not declare
+  # exclude its component.
   msk:
     hosts: ["*.kafka.me-central-1.amazonaws.com"]
     ports: [9098, 9094]

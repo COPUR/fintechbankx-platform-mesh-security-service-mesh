@@ -105,25 +105,52 @@ pods carry `component=service`.
   pod, or any pod without the component label, never reaches the brokers.
   Every service chart must label its API pods `app.kubernetes.io/component:
   service`; a chart without it loses MSK egress (fail closed).
-- The compliance Job runs as its own ServiceAccount
-  `compliance-evidence-service-db-migration`, listed in the contract as a
-  `role: db-migration` workload (`migrates: compliance-evidence-service`,
-  selector name + component). It gets no RequestAuthentication, no
-  AuthorizationPolicy, no call or telemetry edge and no secret slug (its
-  ExternalSecret carries the service's name and reads
-  `<env>/compliance-evidence-service/db-migration`). The renderer refuses a
-  migration workload with MSK, a looser selector, an `apiPrefix`/`serviceId`
-  or an edge (`tests/migration-job-egress.test.mjs`).
-- Known overlap: the service's edge-derived egress NetworkPolicies key on the
-  name only, so they also open Keycloak 8080 and the collector 4317/4318 to
-  the Job pod at L3/L4. Istio denies it there (no ALLOW names the Job's
-  principal). Narrowing them to `component=service` waits for every chart to
-  carry the label. `allow-egress-vpc-https` (443 to VPC endpoints) is
-  namespace-wide.
+- Customer, risk and compliance run their Jobs **without** a sidecar (CRC
+  branch `claude/customer-risk-compliance-deployable-ygi0zo`, each chart's
+  `templates/migration-job.yaml:39-49`: `sidecar.istio.io/inject: "false"`
+  written after `podLabels`), each as its own ServiceAccount
+  `<service>-db-migration` with no token and no IAM role. The contract lists
+  them as `role: db-migration` workloads
+  (`customer/customer-profile-kyc-service-db-migration`,
+  `risk/risk-decisioning-service-db-migration`,
+  `compliance/compliance-evidence-service-db-migration`; `migrates: <service>`,
+  selector name + component, `sidecar: false`, Aurora only), each with an
+  `exceptions.workloadInjection` entry (validator R9). The services'
+  Deployments keep their sidecars. This mesh does not need the opt-out
+  (native sidecars let a Job complete); it is the owner's choice.
+- A sidecar-less Job pod gets `allow-egress-dns` and its service's name-keyed
+  `allow-egress-aurora` (5432 to `AURORA_CIDR`, the policy its API pods use)
+  and nothing else. Every other NetworkPolicy of its namespace that could
+  select it excludes `component=db-migration` (`NotIn`): `allow-egress-istiod`,
+  `allow-egress-vpc-https`, `allow-ingress-node-health`,
+  `allow-ingress-observability-scrape`, `allow-ingress-from-<namespace>` and
+  the service's edge egress to identity and observability. So: no istiod, no
+  VPC endpoints, no MSK, no east-west, no ingress. The rule is the same one
+  the products history-guard check pods use (below); it applies to any
+  `role: db-migration` or `role: history-guard-check` workload with
+  `sidecar: false`, and a store policy excludes only the Jobs that do not
+  declare that store. No pod without that component label, and nothing
+  outside these namespaces, changes.
+- The selector is name + component: the only other chart label,
+  `app.kubernetes.io/instance`, is the Helm release name, chosen per install.
+  The charts must keep both labels on the Job pods. Without
+  `component=db-migration` a Job pod falls back to everything its API pods get
+  at L3/L4 except MSK (MSK requires `component=service`); without the name
+  label it loses Aurora (fail closed).
+- No RequestAuthentication, AuthorizationPolicy, call or telemetry edge or
+  secret slug names the Jobs (each ExternalSecret carries the service's name
+  and reads `<env>/<service>/db-migration`). The renderer refuses a migration
+  workload with MSK, a looser selector, an `apiPrefix`/`serviceId`, a
+  DestinationRule, `sidecar: true` or an edge; a migration workload without
+  `sidecar` (native sidecar) still renders with istiod egress and never MSK
+  (`tests/migration-job-egress.test.mjs`,
+  `tests/sidecarless-migration-job-egress.test.mjs`).
 - The other services' Jobs (loan-lifecycle, payment initiation/settlement,
   request-to-pay, recurring mandates, bulk orchestration, consent
-  authorization) run as the namespace `default` ServiceAccount with no token,
-  so they need no contract entry; Aurora egress reaches them by the name label.
+  authorization) run as the namespace `default` ServiceAccount with no token
+  and have no contract entry; Aurora egress reaches them by the name label,
+  and so do the namespace-wide policies. Several of them also run without a
+  sidecar (open ask: model them the same way).
 
 **Drill checklist for the first dev-cluster install** (not run yet; record the
 evidence with the install log). Use `helm upgrade --install ... --timeout 15m`
@@ -140,15 +167,12 @@ evidence with the install log). Use `helm upgrade --install ... --timeout 15m`
   the Job's 600 s `activeDeadlineSeconds` (the deadline counts from Job start,
   so a slow sync eats migration time). Record the sync time from the
   ExternalSecret status.
-- [ ] The native sidecar exits so the Job finishes: the pod spec shows
-  `istio-proxy` under `initContainers` with `restartPolicy: Always`
-  (istiod `ENABLE_NATIVE_SIDECARS`); after the `db-migration` container exits 0
-  the pod phase is `Succeeded` with no `istio-proxy` still running. A pod stuck
-  `Running`/`NotReady` with only the proxy alive means the sidecar was injected
-  as a regular container.
-- [ ] Mesh path: in `istio-proxy` stats or access logs of the Job pod, Aurora
-  5432 goes through `outbound|5432||aurora-postgresql.fintechbankx.internal`,
-  with no `BlackHoleCluster` hits and no MSK (9098/9094) connection attempt.
+- [ ] No sidecar: the Job pod spec has no `istio-proxy` container or init
+  container, and the pod phase is `Succeeded` after the `db-migration`
+  container exits 0.
+- [ ] Network path: Flyway reaches Aurora 5432 (`AURORA_CIDR`) with DNS only;
+  from a debug pod carrying the Job's labels in the same namespace, istiod
+  15012, a VPC endpoint 443, MSK 9098/9094 and Keycloak 8080 time out.
 - [ ] Hook resources are deleted per `helm.sh/hook-delete-policy`: after
   success the ServiceAccount and the db-migration ExternalSecret
   (`before-hook-creation,hook-succeeded`) are gone, and with them the synced
@@ -168,9 +192,8 @@ sets `sidecar.istio.io/inject: "false"` on them, and carry
 `app.kubernetes.io/name=open-products-catalog-service` and
 `app.kubernetes.io/component=history-guard-check`. This mesh does not need
 that opt-out: istiod injects native sidecars (`ENABLE_NATIVE_SIDECARS`), so a
-Job completes with a sidecar, as the migration Jobs above and the
-`keycloak-realm-import` Job do. The exception records the owner's choice,
-not a mesh constraint.
+Job completes with a sidecar, as the `keycloak-realm-import` Job does. The
+exception records the owner's choice, not a mesh constraint.
 
 - Contract: the `role: history-guard-check` workload
   `open-finance/open-products-catalog-service-history-guard-check`
@@ -198,9 +221,10 @@ not a mesh constraint.
 Open asks for the open-finance/products thread (not mesh defects):
 
 - Sidecar opt-out. Products may drop `sidecar.istio.io/inject: "false"` and
-  run the check pods meshed with no ALLOW naming them, as the migration Jobs
-  do; the `exceptions.workloadInjection` entry and the renderer's sidecar-less
-  rule for `role: history-guard-check` would then be revisited. The
+  run the check pods meshed with no ALLOW naming them, as
+  `keycloak-realm-import` does; the `exceptions.workloadInjection` entry and
+  the renderer's sidecar-less rule for `role: history-guard-check` would then
+  be revisited. The
   NetworkPolicy scoping above holds either way.
 - Tracing. The check pods `envFrom` the products ConfigMap, which sets
   `TRACING_ENABLED="true"` and the collector OTLP endpoint (4318); their
@@ -278,6 +302,7 @@ handshake and failure counters for `MeshMtlsHandshakeFailures`.
 | injection | cert-manager | cert-manager / trust-manager webhooks are called by the kube-apiserver; holds the internal CA key pair |
 | workloadInjection (R9) | observability/prometheus-operator, kube-state-metrics, node-exporter | API-server webhook; scrape-only; hostNetwork. NetworkPolicy only, never a principal |
 | workloadInjection (R9) | open-finance/open-products-catalog-service-history-guard-check | Products chart opts its check pods out (not a mesh constraint; open ask). DNS and products Aurora only, never a principal |
+| workloadInjection (R9) | customer/customer-profile-kyc-service-db-migration, risk/risk-decisioning-service-db-migration, compliance/compliance-evidence-service-db-migration | CRC charts opt their Flyway Jobs out (not a mesh constraint). DNS and the service's Aurora only, never a principal |
 | requestAuthentication | open-finance | Own DPoP/FAPI tokens with a per-service issuer; open data is public |
 | networkPolicyDefaultDeny | istio-system, external-secrets, cert-manager | Webhooks called from EKS control-plane ENIs; not yet drilled |
 

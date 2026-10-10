@@ -33,10 +33,12 @@ export const SERVICE_COMPONENT = 'service';
 export const MIGRATION_COMPONENT = 'db-migration';
 
 /**
- * A Flyway migration Job (`role: db-migration`): a principal of its own, no
- * Service, no inbound, no call edges (not part of the wildcards), no
- * RequestAuthentication and no secret slug of its own. It reaches only DNS,
- * istiod and the datastores it declares (Aurora only).
+ * A Flyway migration Job (`role: db-migration`): a ServiceAccount of its own,
+ * no Service, no inbound, no call edges (not part of the wildcards), no
+ * RequestAuthentication and no secret slug of its own. It reaches only DNS
+ * and the datastores it declares (Aurora only); with a sidecar (`sidecar`
+ * absent) also istiod, without one (`sidecar: false`, as the customer, risk
+ * and compliance charts run it) nothing else.
  */
 export function isMigrationJob(w) {
   return w.role === MIGRATION_COMPONENT;
@@ -60,6 +62,16 @@ export function isGuardCheckJob(w) {
 /** A Job workload (migration or guard check): never a service, caller or callee. */
 export function isJobWorkload(w) {
   return isMigrationJob(w) || isGuardCheckJob(w);
+}
+
+/**
+ * A Job workload that runs without an Istio sidecar (`sidecar: false`,
+ * exceptions.workloadInjection): its pods get DNS and the datastores the Job
+ * declares (Aurora) and nothing else; every other policy of its namespace
+ * that could select them excludes its component.
+ */
+export function isSidecarLessJob(w) {
+  return isJobWorkload(w) && w.sidecar === false;
 }
 
 /** Every service workload (not a migration or guard-check Job) in a `kind: service` namespace. */

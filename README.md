@@ -124,10 +124,14 @@ A service chart must (platform contract addendum, 2026-10-08):
   27017 DocumentDB, 6379 Redis with TLS, 9093 Strimzi mutual TLS); the
   workload's egress NetworkPolicy still limits where those ports go;
 - run a Flyway migration Job either with the sidecar (native sidecar, the
-  default) or with `sidecar.istio.io/inject: "false"`; a sidecar-less Job is
-  admitted, must carry the same `app.kubernetes.io/name=<sa>` label so its
-  datastore egress applies, and can reach only its database, never a mesh
-  service (STRICT mTLS);
+  default) or with `sidecar.istio.io/inject: "false"`; either way its pods
+  carry `app.kubernetes.io/name=<sa>` (Aurora egress) and
+  `app.kubernetes.io/component=db-migration` (never MSK). A sidecar-less Job
+  is listed in the contract as a `role: db-migration` workload with
+  `sidecar: false` and an `exceptions.workloadInjection` entry, as the
+  customer, risk and compliance Jobs are; its pods then reach DNS and their
+  service's Aurora only (no istiod, VPC endpoints, east-west or ingress),
+  and never a mesh service (STRICT mTLS);
 - reference secrets through ClusterSecretStore `aws-secrets-manager`
   (`platform-secrets` is not valid), label each ExternalSecret
   `app.kubernetes.io/name=<sa>` and read only keys `<env>/<sa>/...`
