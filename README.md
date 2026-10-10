@@ -131,7 +131,9 @@ A service chart must (platform contract addendum, 2026-10-08):
   `sidecar: false` and an `exceptions.workloadInjection` entry, as the
   customer, risk and compliance Jobs are; its pods then reach DNS and their
   service's Aurora only (no istiod, VPC endpoints, east-west or ingress),
-  and never a mesh service (STRICT mTLS);
+  and never a mesh service (STRICT mTLS). The renderer refuses a namespace
+  where a meshed workload shares the component label of a sidecar-less Job
+  (the exclusion is by component, so the meshed one would lose istiod);
 - reference secrets through ClusterSecretStore `aws-secrets-manager`
   (`platform-secrets` is not valid), label each ExternalSecret
   `app.kubernetes.io/name=<sa>` and read only keys `<env>/<sa>/...`

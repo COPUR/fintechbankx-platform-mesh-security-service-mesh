@@ -770,7 +770,9 @@ function mayMatch(selector, labels) {
 // (namespace-wide, or keyed on their service's name) excludes their
 // component (NotIn); a store policy excludes only the Jobs that do not
 // declare that store. Policies no such Job could match, and namespaces
-// without one, are unchanged.
+// without one, are unchanged. The exclusion is by component, so no other
+// workload of the namespace may share that component
+// (checkSidecarLessJobComponents).
 function sidecarLessJobExclusion(contract, n) {
   const jobs = (n.workloads || [])
     .filter(isSidecarLessJob)
@@ -1178,7 +1180,8 @@ export function checkMigrationJobs(contract) {
       }
       if (w.service !== null) throw new Error(`${ref}: a migration Job has no Service (service: null)`);
       if (w.destinationRule !== false) throw new Error(`${ref}: a migration Job is no callee (destinationRule: false)`);
-      // false: no sidecar (R9 exception; DNS and Aurora only). Absent: native sidecar (also istiod).
+      // false: no sidecar (R9 exception; DNS and Aurora only). Absent: native sidecar (also istiod),
+      // refused next to a sidecar-less db-migration Job of the namespace (checkSidecarLessJobComponents).
       if (w.sidecar !== undefined && w.sidecar !== false) {
         throw new Error(`${ref}: a migration Job declares sidecar: false or absent (native sidecar), got ${JSON.stringify(w.sidecar)}`);
       }
@@ -1237,10 +1240,43 @@ export function checkGuardCheckJobs(contract) {
   }
 }
 
+// ------------------------------------------------- sidecar-less exclusion
+// sidecarLessJobExclusion narrows the namespace-wide policies by component
+// alone: one selector cannot say NOT (name=X AND component=Y). Any other
+// workload of the namespace with that component would lose istiod, the VPC
+// endpoints and all ingress with the Job, and a meshed (native sidecar) Job
+// would hang with no istiod. Refuse the mix: run every Job of that component
+// in the namespace without a sidecar, or give the sidecar-less Job pods a
+// component label of their own.
+export function checkSidecarLessJobComponents(contract) {
+  for (const n of contract.namespaces) {
+    const workloads = n.workloads || [];
+    const sidecarLess = workloads.filter(isSidecarLessJob);
+    if (!sidecarLess.length) continue;
+    const byComponent = new Map();
+    for (const w of sidecarLess) {
+      const c = resolveWorkload(contract, n.name, w.name || w.serviceAccount).selector[COMPONENT_LABEL];
+      byComponent.set(c, [...(byComponent.get(c) || []), `${n.name}/${w.name || w.serviceAccount}`]);
+    }
+    for (const w of workloads.filter((x) => !isSidecarLessJob(x))) {
+      const ref = `${n.name}/${w.name || w.serviceAccount}`;
+      const c = resolveWorkload(contract, n.name, w.name || w.serviceAccount).selector[COMPONENT_LABEL];
+      if (c !== undefined && byComponent.has(c)) {
+        throw new Error(
+          `${ref}: shares component ${c} with the sidecar-less ${byComponent.get(c).join(', ')}; ` +
+            `the namespace-wide policies exclude that component, so it would lose istiod, VPC endpoints and ingress. ` +
+            `Run every ${c} Job of ${n.name} without a sidecar, or give the sidecar-less Job pods a component label of their own`,
+        );
+      }
+    }
+  }
+}
+
 // --------------------------------------------------------------------- write
 export function render(contract = loadContract()) {
   checkMigrationJobs(contract);
   checkGuardCheckJobs(contract);
+  checkSidecarLessJobComponents(contract);
   return {
     'namespaces.yaml': namespaces(contract),
     'peer-authentication.yaml': peerAuthentications(contract),

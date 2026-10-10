@@ -145,6 +145,14 @@ pods carry `component=service`.
   `sidecar` (native sidecar) still renders with istiod egress and never MSK
   (`tests/migration-job-egress.test.mjs`,
   `tests/sidecarless-migration-job-egress.test.mjs`).
+- The exclusion is by component alone (one selector cannot say NOT (name AND
+  component)), so a meshed Job with the component of a sidecar-less Job in the
+  same namespace would lose istiod, VPC endpoints and ingress with it. The
+  renderer refuses that mix (`checkSidecarLessJobComponents`): either every
+  `db-migration` Job of a namespace runs without a sidecar, or the
+  sidecar-less Job pods carry a component label of their own. This matters
+  for payments, where request-to-pay's migration Job is meshed by default
+  while the other services' Jobs opt out.
 - The other services' Jobs (loan-lifecycle, payment initiation/settlement,
   request-to-pay, recurring mandates, bulk orchestration, consent
   authorization) run as the namespace `default` ServiceAccount with no token

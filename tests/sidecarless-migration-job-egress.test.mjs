@@ -246,3 +246,71 @@ test('renderer refuses a loose or extended migration Job; a meshed one keeps ist
   assert.ok(!egress.includes('allow-egress-msk'));
   assert.doesNotThrow(() => render(contract));
 });
+
+// The namespace-wide policies exclude a sidecar-less Job by component only
+// (one selector cannot say NOT (name=X AND component=Y)). A meshed Job with the
+// same component in the same namespace would lose istiod, VPC endpoints and
+// ingress with it, and its proxy could not reach istiod, so the renderer
+// refuses that mix. Distinct components (a sidecar-less guard check next to a
+// meshed migration Job) still render, and the meshed Job keeps istiod.
+test('renderer refuses a namespace mixing sidecar-less and meshed Jobs of one component', () => {
+  const migration = (svc, sidecar) => ({
+    serviceAccount: `${svc}-db-migration`,
+    role: 'db-migration',
+    migrates: svc,
+    sourceRepo: 'example',
+    selector: { 'app.kubernetes.io/name': svc, 'app.kubernetes.io/component': 'db-migration' },
+    ...(sidecar === false ? { sidecar: false } : {}),
+    service: null,
+    destinationRule: false,
+    datastores: ['aurora-postgresql'],
+  });
+  const withJobs = (ns, jobs) => {
+    const c = structuredClone(contract);
+    const n = c.namespaces.find((x) => x.name === ns);
+    for (const [svc, sidecar] of jobs) {
+      n.workloads.push(migration(svc, sidecar));
+      if (sidecar === false) c.exceptions.workloadInjection.push({ workload: `${ns}/${svc}-db-migration`, reason: 'test' });
+    }
+    return c;
+  };
+  const egressOf = (c, ns, svc) =>
+    names(selecting(render(c)['network-policies.yaml'], ns, { 'app.kubernetes.io/name': svc, 'app.kubernetes.io/component': 'db-migration' }, 'Egress'));
+
+  // Payments: settlement's Job sidecar-less, request-to-pay's meshed (its chart default).
+  const mixed = withJobs('payments', [
+    ['payment-initiation-settlement-service', false],
+    ['payment-request-to-pay-service', undefined],
+  ]);
+  assert.throws(() => render(mixed), /payments\/payment-request-to-pay-service-db-migration.*component db-migration/);
+
+  // Same in a CRC namespace: a meshed Job next to the sidecar-less one.
+  const crc = structuredClone(contract);
+  crc.namespaces.find((n) => n.name === 'risk').workloads.push({
+    ...migration('risk-decisioning-service', undefined),
+    serviceAccount: 'risk-decisioning-service-db-migration-meshed',
+  });
+  assert.throws(() => render(crc), /risk\/risk-decisioning-service-db-migration-meshed.*component db-migration/);
+
+  // All sidecar-less, or all meshed: renders; meshed Jobs keep istiod and VPC endpoints.
+  const allOff = withJobs('payments', [
+    ['payment-initiation-settlement-service', false],
+    ['payment-request-to-pay-service', false],
+  ]);
+  for (const svc of ['payment-initiation-settlement-service', 'payment-request-to-pay-service']) {
+    assert.deepEqual(egressOf(allOff, 'payments', svc), ['allow-egress-aurora', 'allow-egress-dns', 'default-deny-all']);
+  }
+  const allOn = withJobs('payments', [
+    ['payment-initiation-settlement-service', undefined],
+    ['payment-request-to-pay-service', undefined],
+  ]);
+  for (const svc of ['payment-initiation-settlement-service', 'payment-request-to-pay-service']) {
+    const eg = egressOf(allOn, 'payments', svc);
+    assert.ok(eg.includes('allow-egress-istiod') && eg.includes('allow-egress-vpc-https'), `${svc}: ${eg.join(', ')}`);
+  }
+
+  // A meshed migration Job next to the sidecar-less history-guard check (another component) renders and keeps istiod.
+  const ofMixed = withJobs('open-finance', [['open-products-catalog-service', undefined]]);
+  const eg = egressOf(ofMixed, 'open-finance', 'open-products-catalog-service');
+  assert.ok(eg.includes('allow-egress-istiod') && eg.includes('allow-egress-vpc-https'), eg.join(', '));
+});
