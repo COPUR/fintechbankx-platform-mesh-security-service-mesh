@@ -8,7 +8,9 @@
 # Tools (override with env vars): kustomize 5.x, kubeconform, helm 3.x,
 # istioctl matching deploy/istio/ISTIO_VERSION (optional: ISTIOCTL=skip).
 # JETSTACK_CHARTS=skip skips the cert-manager / trust-manager charts (only
-# where charts.jetstack.io is unreachable; CI never sets it).
+# where charts.jetstack.io is unreachable; CI never sets it). Otherwise both
+# archives must match deploy/cert-manager/CHART_DIGESTS, so a PLACEHOLDER
+# digest fails the run (scripts/ci/validate-jetstack-charts.sh).
 # Never applies anything.
 set -euo pipefail
 
@@ -19,8 +21,6 @@ HELM="${HELM:-helm}"
 ISTIOCTL="${ISTIOCTL:-istioctl}"
 K8S_VERSION="${K8S_VERSION:-1.31.0}"
 ISTIO_VERSION="$(tr -d '[:space:]' < "$ROOT/deploy/istio/ISTIO_VERSION")"
-CERT_MANAGER_VERSION="$(tr -d '[:space:]' < "$ROOT/deploy/cert-manager/CERT_MANAGER_VERSION")"
-TRUST_MANAGER_VERSION="$(tr -d '[:space:]' < "$ROOT/deploy/cert-manager/TRUST_MANAGER_VERSION")"
 JETSTACK_CHARTS="${JETSTACK_CHARTS:-validate}"
 OUT="$ROOT/build/rendered"
 CRD_SCHEMAS='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
@@ -76,32 +76,8 @@ for env in dev staging prod; do
   # Chart output includes CRDs and webhook kinds without published schemas.
   kubeconform_run -ignore-missing-schemas "$OUT/istio-base-$env.yaml" "$OUT/istiod-$env.yaml" "$OUT/istio-gateway-$env.yaml"
 done
-echo "== jetstack charts cert-manager $CERT_MANAGER_VERSION, trust-manager $TRUST_MANAGER_VERSION"
-if [ "$JETSTACK_CHARTS" = "skip" ]; then
-  echo "JETSTACK_CHARTS=skip: cert-manager and trust-manager charts NOT validated" >&2
-else
-  if [ ! -f "$CHARTS/cert-manager-$CERT_MANAGER_VERSION.tgz" ] || [ ! -f "$CHARTS/trust-manager-$TRUST_MANAGER_VERSION.tgz" ]; then
-    "$HELM" repo add jetstack https://charts.jetstack.io --force-update >/dev/null
-    "$HELM" pull jetstack/cert-manager --version "$CERT_MANAGER_VERSION" -d "$CHARTS"
-    "$HELM" pull jetstack/trust-manager --version "$TRUST_MANAGER_VERSION" -d "$CHARTS"
-  fi
-  P="$ROOT/deploy/cert-manager/helm"
-  # Chart values schemas reject unknown keys in the committed values files.
-  "$HELM" template cert-manager "$CHARTS/cert-manager-$CERT_MANAGER_VERSION.tgz" -n cert-manager \
-    --kube-version "$K8S_VERSION" -f "$P/cert-manager.values.yaml" > "$OUT/cert-manager.yaml"
-  "$HELM" template trust-manager "$CHARTS/trust-manager-$TRUST_MANAGER_VERSION.tgz" -n cert-manager \
-    --kube-version "$K8S_VERSION" -f "$P/trust-manager.values.yaml" > "$OUT/trust-manager.yaml"
-  grep -Eq 'name: "?certificates\.cert-manager\.io"?$' "$OUT/cert-manager.yaml" \
-    || { echo "cert-manager: CRDs not rendered (crds.enabled)" >&2; exit 1; }
-  grep -q 'bundles.trust.cert-manager.io' "$OUT/trust-manager.yaml" \
-    || { echo "trust-manager: Bundle CRD not rendered (crds.enabled)" >&2; exit 1; }
-  grep -q -- '--trust-namespace=cert-manager' "$OUT/trust-manager.yaml" \
-    || { echo "trust-manager: trust namespace is not cert-manager" >&2; exit 1; }
-  if grep -q -- '--secret-targets-enabled=true' "$OUT/trust-manager.yaml"; then
-    echo "trust-manager: secret targets must stay disabled" >&2; exit 1
-  fi
-  # No published schema for CustomResourceDefinition; every other kind
-  # (including trust-manager's cert-manager Certificate/Issuer) must validate.
-  kubeconform_run -skip CustomResourceDefinition "$OUT/cert-manager.yaml" "$OUT/trust-manager.yaml"
-fi
+# cert-manager / trust-manager: pulled, checked against
+# deploy/cert-manager/CHART_DIGESTS (sha256sum -c), then rendered and validated.
+HELM="$HELM" KUBECONFORM="$KUBECONFORM" K8S_VERSION="$K8S_VERSION" JETSTACK_CHARTS="$JETSTACK_CHARTS" OUT="$OUT" \
+  bash "$ROOT/scripts/ci/validate-jetstack-charts.sh"
 echo "all manifests rendered and validated"

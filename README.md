@@ -66,7 +66,7 @@ schema, policy checks), never applied to a cluster.
 | [deploy/kustomize](deploy/kustomize) | Base (generated policies) + overlays `dev`, `staging`, `prod` with `params.env` |
 | [k8s/platform/external-secrets](k8s/platform/external-secrets) | ClusterSecretStores `aws-secrets-manager` (service namespaces and `observability`, ESO SA `external-secrets`) and `aws-secrets-manager-platform` (`cert-manager`, `istio-ingress`, `identity` only, ESO SA `external-secrets-platform`), each with its own IRSA role |
 | [k8s/platform/cert-manager](k8s/platform/cert-manager) | ClusterIssuer and trust-manager Bundle `fintechbankx-internal-ca` (key pair from Secrets Manager `<env>/platform/internal-ca`); Bundle `rds-ca-bundle` (Amazon RDS / DocumentDB CA) |
-| [deploy/cert-manager](deploy/cert-manager) | Pinned jetstack chart versions (`CERT_MANAGER_VERSION`, `TRUST_MANAGER_VERSION`) and the committed Helm values for cert-manager and trust-manager |
+| [deploy/cert-manager](deploy/cert-manager) | Pinned jetstack chart versions (`CERT_MANAGER_VERSION`, `TRUST_MANAGER_VERSION`), the expected sha256 of each chart archive (`CHART_DIGESTS`, still a marked placeholder: install `--apply` and CI fail closed until an operator fills it) and the committed Helm values for cert-manager and trust-manager |
 | [deploy/kustomize/platform-pki](deploy/kustomize/platform-pki) | Per-env platform PKI (issuer, bundles, their sources and stores) applied before Istio; renders identically inside the mesh overlay |
 | [deploy/kustomize/components/corporate-directory](deploy/kustomize/components/corporate-directory) | prod only: Bundle `corporate-directory-ca` and Keycloak LDAPS egress |
 | [scripts/generate](scripts/generate) | Renders `deploy/kustomize/base/generated/*.yaml` from the contract |
@@ -154,7 +154,8 @@ contract.
 npm ci && npm test && npm run validate:strict-mtls
 bash scripts/ci/validate-manifests.sh   # needs kustomize, kubeconform, helm, istioctl
 # Without access to charts.jetstack.io: JETSTACK_CHARTS=skip (the
-# cert-manager / trust-manager charts are then NOT validated; CI never skips).
+# cert-manager / trust-manager charts are then NOT pulled, verified against
+# deploy/cert-manager/CHART_DIGESTS or validated; CI never skips).
 ```
 
 Legacy material from the monolith extraction (`k8s/istio/security`,

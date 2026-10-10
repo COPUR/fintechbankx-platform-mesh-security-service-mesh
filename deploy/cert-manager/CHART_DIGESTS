@@ -1,0 +1,26 @@
+# Expected sha256 of the jetstack Helm chart archives, as written by
+#   helm pull jetstack/<chart> --version <version>     (https://charts.jetstack.io)
+# in `sha256sum -c` format: "<64 lower-case hex>  <archive file name>", one line
+# per archive. The names follow CERT_MANAGER_VERSION and TRUST_MANAGER_VERSION;
+# a version bump changes the name and needs a new digest in the same commit.
+#
+# scripts/istio/install-mesh.sh pulls both archives, checks them against these
+# lines (sha256sum -c) and installs from the verified local files only.
+# scripts/ci/validate-jetstack-charts.sh (run by validate-manifests.sh in CI)
+# does the same before helm template.
+#
+# PLACEHOLDER - NOT A DIGEST. The session that added this file could not reach
+# charts.jetstack.io, quay.io/jetstack (OCI) or a GitHub release asset, so it
+# could not hash the published archives. Until an operator replaces both
+# PLACEHOLDER values, install-mesh.sh --apply and CI fail closed (plan mode and
+# JETSTACK_CHARTS=skip only warn).
+#
+# To fill, on a trusted network, with two independent pulls (different machine
+# or network) that must agree:
+#   helm repo add jetstack https://charts.jetstack.io --force-update
+#   helm pull jetstack/cert-manager --version v1.19.6 -d ./charts
+#   helm pull jetstack/trust-manager --version v0.20.3 -d ./charts
+#   (cd ./charts && sha256sum cert-manager-v1.19.6.tgz trust-manager-v0.20.3.tgz)
+# then replace the two lines below and record both pulls in the PR.
+PLACEHOLDER  cert-manager-v1.19.6.tgz
+PLACEHOLDER  trust-manager-v0.20.3.tgz

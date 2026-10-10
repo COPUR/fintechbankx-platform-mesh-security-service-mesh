@@ -2,11 +2,16 @@
 // charts), then the platform PKI (ClusterIssuer, Bundles rds-ca-bundle and
 // fintechbankx-internal-ca), then Istio, waiting after each step. Service
 // charts assume ConfigMap rds-ca-bundle and the ClusterIssuer exist.
-// The install script runs in plan mode here: it prints, it changes nothing.
+// Both chart archives are pinned by content (deploy/cert-manager/CHART_DIGESTS):
+// pulled, checked with sha256sum -c and installed from the verified local file.
+// The install script runs in plan mode here, or with --apply against stubbed
+// helm and kubectl in a throwaway copy: nothing touches a cluster.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { readFileSync, readdirSync, existsSync, mkdtempSync, mkdirSync, cpSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import YAML, { parseAllDocuments } from 'yaml';
@@ -43,9 +48,9 @@ test('chart versions are pinned to exact releases', () => {
 for (const env of ENVS) {
   test(`${env}: install order cert-manager -> trust-manager -> platform PKI -> Istio, each waited for`, () => {
     const s = plan(env);
-    const cm = indexOf(s, /^helm upgrade --install cert-manager jetstack\/cert-manager /);
+    const cm = indexOf(s, /^helm upgrade --install cert-manager \S+\/cert-manager-v[\d.]+\.tgz /);
     const cmWait = indexOf(s, /^kubectl -n cert-manager wait --for=condition=Available .*deployment\/cert-manager-webhook/, cm);
-    const tm = indexOf(s, /^helm upgrade --install trust-manager jetstack\/trust-manager /, cmWait);
+    const tm = indexOf(s, /^helm upgrade --install trust-manager \S+\/trust-manager-v[\d.]+\.tgz /, cmWait);
     const tmWait = indexOf(s, /^kubectl -n cert-manager wait --for=condition=Available .*deployment\/trust-manager/, tm);
     const pki = indexOf(s, new RegExp(`^kubectl apply --server-side -k \\S*/deploy/kustomize/platform-pki/${env}$`), tmWait);
     const issuerWait = indexOf(s, /^kubectl wait --for=condition=Ready .*clusterissuer\/fintechbankx-internal-ca/, pki);
@@ -63,18 +68,28 @@ for (const env of ENVS) {
     assert.ok(indexOf(s, /^kubectl get crd externalsecrets\.external-secrets\.io/) < cm);
   });
 
-  test(`${env}: every helm install pins its chart version and uses committed values`, () => {
-    const installs = plan(env).filter((l) => l.startsWith('helm upgrade --install '));
+  test(`${env}: every helm install pins its chart and uses committed values; jetstack charts from verified archives`, () => {
+    const s = plan(env);
+    const installs = s.filter((l) => l.startsWith('helm upgrade --install '));
     assert.equal(installs.length, 5);
     for (const l of installs) {
-      const version = l.match(/--version (\S+)/)?.[1];
-      assert.ok(version, `unpinned: ${l}`);
-      assert.match(version, /^v?\d+\.\d+\.\d+$/, l);
       for (const f of [...l.matchAll(/-f (\S+)/g)].map((m) => m[1])) assert.ok(existsSync(f), `values file ${f}`);
       assert.ok(l.includes(' --wait'), `no --wait: ${l}`);
     }
-    assert.ok(installs[0].includes(`--version ${CERT_MANAGER_VERSION} `));
-    assert.ok(installs[1].includes(`--version ${TRUST_MANAGER_VERSION} `));
+    // Istio: repository chart at a pinned version.
+    for (const l of installs.slice(2)) assert.match(l, /--version \d+\.\d+\.\d+ /, l);
+    // Jetstack: the pulled archive of the pinned version, never a repository reference.
+    const archives = [`cert-manager-${CERT_MANAGER_VERSION}.tgz`, `trust-manager-${TRUST_MANAGER_VERSION}.tgz`];
+    const charts = ['cert-manager', 'trust-manager'];
+    installs.slice(0, 2).forEach((l, i) => {
+      const chart = l.split(' ')[4];
+      assert.ok(chart.endsWith(`/${archives[i]}`), l);
+      assert.doesNotMatch(l, /jetstack\//, l);
+      const pull = indexOf(s, new RegExp(`^helm pull jetstack/${charts[i]} --version ${[CERT_MANAGER_VERSION, TRUST_MANAGER_VERSION][i]} -d `));
+      const verify = indexOf(s, new RegExp(`^verify_chart_archive \\S+/deploy/cert-manager/CHART_DIGESTS ${chart.replace(/[.]/g, '\\.')}$`), pull);
+      // Both archives are verified before the first install.
+      assert.ok(verify < s.indexOf(installs[0]), `${archives[i]} verified after an install`);
+    });
   });
 }
 
@@ -147,8 +162,151 @@ test('no script applies manifests from a remote URL for cert-manager or trust-ma
 });
 
 test('validate-manifests renders and kubeconforms both jetstack charts at the pinned versions', () => {
-  const s = read('scripts/ci/validate-manifests.sh');
+  assert.match(read('scripts/ci/validate-manifests.sh'), /bash "\$ROOT\/scripts\/ci\/validate-jetstack-charts\.sh"/);
+  const s = read('scripts/ci/validate-jetstack-charts.sh');
   assert.match(s, /"\$HELM" pull jetstack\/cert-manager --version "\$CERT_MANAGER_VERSION"/);
   assert.match(s, /"\$HELM" pull jetstack\/trust-manager --version "\$TRUST_MANAGER_VERSION"/);
   assert.match(s, /kubeconform_run -skip CustomResourceDefinition "\$OUT\/cert-manager\.yaml" "\$OUT\/trust-manager\.yaml"/);
+});
+
+// ------------------------------------------------------------ chart digests
+const ARCHIVES = [`cert-manager-${CERT_MANAGER_VERSION}.tgz`, `trust-manager-${TRUST_MANAGER_VERSION}.tgz`];
+const SHA256 = /^[0-9a-f]{64}$/;
+const sha256 = (data) => createHash('sha256').update(data).digest('hex');
+const digestLines = (text) =>
+  text
+    .split('\n')
+    .filter((l) => l.trim() && !l.trimStart().startsWith('#'))
+    .map((l) => l.trim().split(/\s+/));
+
+test('CHART_DIGESTS names exactly the pinned archives, each with a sha256 or the marked placeholder', () => {
+  const text = read('deploy/cert-manager/CHART_DIGESTS');
+  const lines = digestLines(text);
+  assert.deepEqual(lines.map(([, name]) => name).sort(), [...ARCHIVES].sort());
+  for (const [digest, name] of lines) {
+    assert.ok(SHA256.test(digest) || digest === 'PLACEHOLDER', `${name}: ${digest}`);
+  }
+  if (lines.some(([d]) => d === 'PLACEHOLDER')) {
+    // A placeholder must say so: install --apply and CI fail closed until an operator fills it.
+    assert.match(text, /PLACEHOLDER - NOT A DIGEST/);
+    assert.match(text, /fail closed/);
+  }
+});
+
+// Charts pulled by the helm stub: deterministic content per chart and version.
+const stubArchive = (chart, version) => `chart ${chart} ${version}\n`;
+const STUB_HELM = `#!/usr/bin/env bash
+echo "helm $*" >> "$STUB_LOG"
+case "$1" in
+  pull)
+    ref="$2"; shift 2; ver=""; dir=""
+    while [ $# -gt 0 ]; do case "$1" in --version) ver="$2"; shift 2;; -d) dir="$2"; shift 2;; *) shift;; esac; done
+    chart="\${ref##*/}"
+    printf 'chart %s %s\\n' "$chart" "$ver" > "$dir/$chart-$ver.tgz"
+    if [ "\${STUB_TAMPER:-}" = "$chart" ]; then echo tampered >> "$dir/$chart-$ver.tgz"; fi ;;
+  template)
+    printf 'name: certificates.cert-manager.io\\nname: bundles.trust.cert-manager.io\\n- --trust-namespace=cert-manager\\n' ;;
+esac
+exit 0
+`;
+const STUB_LOGGER = (tool) => `#!/usr/bin/env bash\necho "${tool} $*" >> "$STUB_LOG"\nexit 0\n`;
+
+/** Throwaway copy of the scripts and deploy/cert-manager, with stub tools on PATH. */
+function sandbox(digests) {
+  const dir = mkdtempSync(join(tmpdir(), 'pki-install-'));
+  for (const p of ['scripts/istio/install-mesh.sh', 'scripts/lib/chart-digests.sh', 'scripts/ci/validate-jetstack-charts.sh', 'deploy/cert-manager', 'deploy/istio/ISTIO_VERSION']) {
+    cpSync(join(ROOT, p), join(dir, p), { recursive: true });
+  }
+  if (digests !== undefined) writeFileSync(join(dir, 'deploy/cert-manager/CHART_DIGESTS'), digests);
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  for (const [tool, body] of [['helm', STUB_HELM], ['kubectl', STUB_LOGGER('kubectl')], ['kubeconform', STUB_LOGGER('kubeconform')]]) {
+    writeFileSync(join(bin, tool), body);
+    chmodSync(join(bin, tool), 0o755);
+  }
+  const log = join(dir, 'calls.log');
+  writeFileSync(log, '');
+  const runScript = (script, args, env = {}) => {
+    const r = spawnSync('bash', [join(dir, script), ...args], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STUB_LOG: log, ...env },
+    });
+    return { status: r.status, stderr: r.stderr, calls: readFileSync(log, 'utf8').split('\n').filter(Boolean) };
+  };
+  return { dir, runScript, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+const goodDigests = () =>
+  `# test digests\n${sha256(stubArchive('cert-manager', CERT_MANAGER_VERSION))}  ${ARCHIVES[0]}\n` +
+  `${sha256(stubArchive('trust-manager', TRUST_MANAGER_VERSION))}  ${ARCHIVES[1]}\n`;
+const placeholderDigests = `PLACEHOLDER  ${ARCHIVES[0]}\nPLACEHOLDER  ${ARCHIVES[1]}\n`;
+const mutating = (calls) => calls.filter((c) => /^helm (upgrade|install)|^kubectl (apply|create|delete|patch)/.test(c));
+
+test('install-mesh --apply refuses a PLACEHOLDER digest before any helm or kubectl call', () => {
+  const sb = sandbox(placeholderDigests);
+  try {
+    const r = sb.runScript('scripts/istio/install-mesh.sh', ['dev', '--apply']);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /refusing --apply/);
+    assert.deepEqual(r.calls, []);
+    // Plan mode still prints the plan, with a warning.
+    const p = sb.runScript('scripts/istio/install-mesh.sh', ['dev']);
+    assert.equal(p.status, 0);
+    assert.match(p.stderr, /WARNING: plan only/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test('install-mesh --apply installs both jetstack charts from the verified archives', () => {
+  const sb = sandbox(goodDigests());
+  try {
+    const r = sb.runScript('scripts/istio/install-mesh.sh', ['dev', '--apply']);
+    assert.equal(r.status, 0, r.stderr);
+    const installs = r.calls.filter((c) => /^helm upgrade --install (cert|trust)-manager /.test(c));
+    assert.equal(installs.length, 2);
+    installs.forEach((c, i) => assert.ok(c.split(' ')[4].endsWith(`/${ARCHIVES[i]}`), c));
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test('install-mesh --apply stops on a tampered archive before installing either chart', () => {
+  for (const chart of ['cert-manager', 'trust-manager']) {
+    const sb = sandbox(goodDigests());
+    try {
+      const r = sb.runScript('scripts/istio/install-mesh.sh', ['dev', '--apply'], { STUB_TAMPER: chart });
+      assert.notEqual(r.status, 0, chart);
+      assert.match(r.stderr, new RegExp(`${chart}-v[\\d.]+\\.tgz does not match its sha256`));
+      assert.deepEqual(mutating(r.calls), [], `${chart}: ${r.calls.join('; ')}`);
+    } finally {
+      sb.cleanup();
+    }
+  }
+});
+
+test('validate-jetstack-charts fails closed on a PLACEHOLDER or tampered archive, renders verified ones', () => {
+  const run = (digests, env = {}) => {
+    const sb = sandbox(digests);
+    try {
+      return sb.runScript('scripts/ci/validate-jetstack-charts.sh', [], { OUT: join(sb.dir, 'out'), ...env });
+    } finally {
+      sb.cleanup();
+    }
+  };
+  const placeholder = run(placeholderDigests);
+  assert.notEqual(placeholder.status, 0);
+  assert.deepEqual(placeholder.calls, [], 'nothing pulled or rendered without digests');
+  const skipped = run(placeholderDigests, { JETSTACK_CHARTS: 'skip' });
+  assert.equal(skipped.status, 0);
+  assert.match(skipped.stderr, /NOT verified/);
+  const tampered = run(goodDigests(), { STUB_TAMPER: 'trust-manager' });
+  assert.notEqual(tampered.status, 0);
+  assert.ok(!tampered.calls.some((c) => c.startsWith('helm template')), tampered.calls.join('; '));
+  const good = run(goodDigests());
+  assert.equal(good.status, 0, good.stderr);
+  assert.equal(good.calls.filter((c) => c.startsWith('helm template')).length, 2);
+  // A missing entry or a stray extra line is an error even when skipped.
+  assert.notEqual(run(`PLACEHOLDER  ${ARCHIVES[0]}\n`, { JETSTACK_CHARTS: 'skip' }).status, 0);
+  assert.notEqual(run(`${placeholderDigests}PLACEHOLDER  cert-manager-v0.0.1.tgz\n`, { JETSTACK_CHARTS: 'skip' }).status, 0);
 });

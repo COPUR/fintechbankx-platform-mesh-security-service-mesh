@@ -240,9 +240,9 @@ charts assume ConfigMap `rds-ca-bundle` and ClusterIssuer
 
 | Step | What | Readiness wait |
 |---|---|---|
-| 0 | Preflight: External Secrets Operator CRDs present (ESO is installed outside this repo) | `kubectl get crd` |
-| 1 | `jetstack/cert-manager` `v1.19.6`, ns `cert-manager`, values `deploy/cert-manager/helm/cert-manager.values.yaml` | `helm --wait` (incl. startupapicheck), CRDs Established, three Deployments Available |
-| 2 | `jetstack/trust-manager` `v0.20.3`, ns `cert-manager`, values `deploy/cert-manager/helm/trust-manager.values.yaml` | `helm --wait`, CRD `bundles.trust.cert-manager.io` Established, Deployment Available |
+| 0 | Preflight: External Secrets Operator CRDs present (ESO is installed outside this repo); both jetstack archives pulled into a fresh directory and checked against `deploy/cert-manager/CHART_DIGESTS` (`sha256sum -c`) | `kubectl get crd`; a mismatch stops the run before any install |
+| 1 | `cert-manager-v1.19.6.tgz` (verified archive), ns `cert-manager`, values `deploy/cert-manager/helm/cert-manager.values.yaml` | `helm --wait` (incl. startupapicheck), CRDs Established, three Deployments Available |
+| 2 | `trust-manager-v0.20.3.tgz` (verified archive), ns `cert-manager`, values `deploy/cert-manager/helm/trust-manager.values.yaml` | `helm --wait`, CRD `bundles.trust.cert-manager.io` Established, Deployment Available |
 | 3 | `kubectl apply --server-side -k deploy/kustomize/platform-pki/<env>` | ClusterSecretStore and ExternalSecret Ready, ClusterIssuer Ready, both Bundles Synced |
 | 4 | Istio base, istiod, mesh overlay, ingress gateway | `helm --wait` |
 | 5 | ConfigMap `rds-ca-bundle` present in every namespace labelled `fintechbankx.io/namespace-kind` `service` or `platform` | polls up to 5 minutes |
@@ -275,13 +275,30 @@ in the mesh render, so the second server-side apply changes nothing.
 The legacy `scripts/istio/deploy-security-policies.sh` no longer applies
 cert-manager from a remote release URL; it points to `install-mesh.sh`.
 
-Not verified: no cluster install has been run. `validate-manifests.sh` pulls
-both charts from `charts.jetstack.io` and validates them with `helm template`
-(values schema) and kubeconform. When this was written, that step had only
-run against charts assembled from the tagged sources (the chart repository
-was not reachable from the authoring environment); the first CI run is the
-first validation of the published archives. Chart archive digests are not
-pinned yet.
+**Chart archives pinned by content.** `deploy/cert-manager/CHART_DIGESTS`
+holds the expected sha256 of `cert-manager-<version>.tgz` and
+`trust-manager-<version>.tgz` in `sha256sum -c` format
+(`scripts/lib/chart-digests.sh`). `install-mesh.sh` checks the file first
+(`--apply` refuses to start without both digests), pulls both archives into a
+fresh temporary directory, verifies them, and installs from the verified local
+files, never from a repository reference. `scripts/ci/validate-jetstack-charts.sh`
+(called by `validate-manifests.sh`) verifies the archives the same way before
+`helm template`; `JETSTACK_CHARTS=skip` checks only that the file names both
+archives.
+
+**The digests are not known yet.** The file holds a marked `PLACEHOLDER` for
+both archives: the authoring session could not reach `charts.jetstack.io`,
+`quay.io/jetstack` (OCI) or a GitHub release asset, so it could not hash the
+published archives. Until an operator fills both lines from two independent
+pulls on a trusted network (steps in the file), `install-mesh.sh --apply` and
+the CI step `validate-manifests.sh` fail closed. A version bump must change the
+digest lines in the same commit (`tests/platform-pki-install.test.mjs` checks
+the names against the version files).
+
+Not verified: no cluster install has been run. When this was written,
+`validate-manifests.sh` had only run against charts assembled from the tagged
+sources; the first CI run with filled digests is the first validation of the
+published archives.
 
 ## Validation
 
@@ -293,7 +310,9 @@ bash scripts/ci/validate-manifests.sh  # kustomize build x3 (+ platform-pki x3),
                                        # (Istio/ESO/cert-manager CRD schemas from datreeio
                                        # CRDs-catalog), validator on rendered output,
                                        # istioctl analyze, helm template of the Istio,
-                                       # cert-manager and trust-manager charts
+                                       # cert-manager and trust-manager charts (the
+                                       # jetstack archives only after sha256sum -c
+                                       # against deploy/cert-manager/CHART_DIGESTS)
 ```
 
 `istioctl analyze --use-kube=false` checks the policies in isolation; it cannot

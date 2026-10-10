@@ -7,14 +7,18 @@
 #   scripts/istio/install-mesh.sh <dev|staging|prod> --apply    # execute
 #
 # Order, each step waited for before the next:
-#   0. preflight: External Secrets Operator CRDs present (installed elsewhere)
-#   1. cert-manager   (jetstack chart, deploy/cert-manager/CERT_MANAGER_VERSION)
-#   2. trust-manager  (jetstack chart, deploy/cert-manager/TRUST_MANAGER_VERSION)
+#   0. preflight: External Secrets Operator CRDs present (installed elsewhere);
+#      both jetstack chart archives pulled and checked against their sha256 in
+#      deploy/cert-manager/CHART_DIGESTS (sha256sum -c) before any install
+#   1. cert-manager   (verified local archive, deploy/cert-manager/CERT_MANAGER_VERSION)
+#   2. trust-manager  (verified local archive, deploy/cert-manager/TRUST_MANAGER_VERSION)
 #   3. platform PKI   (deploy/kustomize/platform-pki/<env>: ClusterIssuer
 #                      fintechbankx-internal-ca, Bundles rds-ca-bundle and
 #                      fintechbankx-internal-ca, their sources and stores)
 #   4. Istio CRDs -> istiod -> namespaces + policies -> gateway
 #   5. rds-ca-bundle ConfigMap present in every FinTechBankX namespace
+# --apply refuses to start while CHART_DIGESTS lacks a sha256 for either
+# archive (PLACEHOLDER): it fails before it touches the cluster.
 # Policies go in before workloads so no pod ever runs without default-deny.
 # Service charts deploy afterwards from their own repositories and assume
 # ConfigMap rds-ca-bundle and ClusterIssuer fintechbankx-internal-ca exist.
@@ -31,6 +35,23 @@ ISTIO_VERSION="$(tr -d '[:space:]' < "$ROOT/deploy/istio/ISTIO_VERSION")"
 CERT_MANAGER_VERSION="$(tr -d '[:space:]' < "$ROOT/deploy/cert-manager/CERT_MANAGER_VERSION")"
 TRUST_MANAGER_VERSION="$(tr -d '[:space:]' < "$ROOT/deploy/cert-manager/TRUST_MANAGER_VERSION")"
 WAIT="${WAIT_TIMEOUT:-300s}"
+DIGESTS="$ROOT/deploy/cert-manager/CHART_DIGESTS"
+CM_CHART="cert-manager-$CERT_MANAGER_VERSION.tgz"
+TM_CHART="trust-manager-$TRUST_MANAGER_VERSION.tgz"
+# shellcheck source-path=SCRIPTDIR source=../lib/chart-digests.sh
+. "$ROOT/scripts/lib/chart-digests.sh"
+
+# Fail closed before anything else: both archives need a committed sha256.
+if ! check_chart_digests_file "$DIGESTS" 0 "$CM_CHART" "$TM_CHART"; then
+  if [ "$MODE" = "--apply" ]; then
+    echo "refusing --apply: deploy/cert-manager/CHART_DIGESTS has no verified sha256 for $CM_CHART and $TM_CHART" >&2
+    exit 1
+  fi
+  echo "WARNING: plan only; --apply refuses until deploy/cert-manager/CHART_DIGESTS holds both sha256 values" >&2
+fi
+# Archives are pulled into a fresh directory and installed from there only.
+CHART_DIR="$(mktemp -d)"
+trap 'rm -rf "$CHART_DIR"' EXIT
 
 run() {
   echo "+ $*"
@@ -59,18 +80,23 @@ verify_rds_ca_bundle() {
 # 0. Preflight: the platform PKI and the mesh overlay contain ExternalSecrets
 # and ClusterSecretStores.
 run kubectl get crd externalsecrets.external-secrets.io clustersecretstores.external-secrets.io
-
-# 1. cert-manager (CRDs in the release, kept on uninstall).
+# Both jetstack archives, pulled and checked (sha256sum -c) before either installs.
 run helm repo add jetstack https://charts.jetstack.io --force-update
-run helm upgrade --install cert-manager jetstack/cert-manager --version "$CERT_MANAGER_VERSION" \
+run helm pull jetstack/cert-manager --version "$CERT_MANAGER_VERSION" -d "$CHART_DIR"
+run helm pull jetstack/trust-manager --version "$TRUST_MANAGER_VERSION" -d "$CHART_DIR"
+run verify_chart_archive "$DIGESTS" "$CHART_DIR/$CM_CHART"
+run verify_chart_archive "$DIGESTS" "$CHART_DIR/$TM_CHART"
+
+# 1. cert-manager (CRDs in the release, kept on uninstall), from the verified archive.
+run helm upgrade --install cert-manager "$CHART_DIR/$CM_CHART" \
   -n cert-manager --create-namespace -f "$P/cert-manager.values.yaml" --wait --timeout 10m
 run kubectl wait --for=condition=Established --timeout="$WAIT" \
   crd/certificates.cert-manager.io crd/issuers.cert-manager.io crd/clusterissuers.cert-manager.io
 run kubectl -n cert-manager wait --for=condition=Available --timeout="$WAIT" \
   deployment/cert-manager deployment/cert-manager-webhook deployment/cert-manager-cainjector
 
-# 2. trust-manager (trust namespace cert-manager, ConfigMap targets only).
-run helm upgrade --install trust-manager jetstack/trust-manager --version "$TRUST_MANAGER_VERSION" \
+# 2. trust-manager (trust namespace cert-manager, ConfigMap targets only), from the verified archive.
+run helm upgrade --install trust-manager "$CHART_DIR/$TM_CHART" \
   -n cert-manager -f "$P/trust-manager.values.yaml" --wait --timeout 10m
 run kubectl wait --for=condition=Established --timeout="$WAIT" crd/bundles.trust.cert-manager.io
 run kubectl -n cert-manager wait --for=condition=Available --timeout="$WAIT" deployment/trust-manager
