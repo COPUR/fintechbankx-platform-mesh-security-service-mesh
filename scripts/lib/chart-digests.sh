@@ -80,9 +80,12 @@ sha256_of() {
 }
 
 # verify_or_report_chart_archive <digests-file> <archive-path>
-# CI only. A committed sha256 must match (mismatch fails). A PLACEHOLDER is
-# reported instead: one greppable line "CHART_DIGEST <archive> <sha256>" that
-# an operator copies into the digests file after a second, independent pull.
+# Validation only (scripts/ci/validate-jetstack-charts.sh), never install. A
+# committed sha256 must match (mismatch fails). A PLACEHOLDER is reported
+# instead: one greppable line "CHART_DIGEST <archive> <sha256>" that an
+# operator copies into the digests file after a second, independent pull. In
+# CI a PLACEHOLDER fails before this runs (npm test,
+# tests/platform-pki-install.test.mjs), so this path is a local step.
 verify_or_report_chart_archive() {
   local file="$1" archive="$2" name digest actual
   name="$(basename "$archive")"

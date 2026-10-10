@@ -9,9 +9,11 @@
 # istioctl matching deploy/istio/ISTIO_VERSION (optional: ISTIOCTL=skip).
 # JETSTACK_CHARTS=skip skips the cert-manager / trust-manager charts (only
 # where charts.jetstack.io is unreachable; CI never sets it). Otherwise both
-# archives must match deploy/cert-manager/CHART_DIGESTS; a PLACEHOLDER digest
-# only warns and prints "CHART_DIGEST <archive> <sha256>"
-# (scripts/ci/validate-jetstack-charts.sh).
+# archives must match deploy/cert-manager/CHART_DIGESTS. In CI a PLACEHOLDER
+# digest fails earlier, at npm test (tests/platform-pki-install.test.mjs); run
+# locally, a PLACEHOLDER only warns and prints "CHART_DIGEST <archive> <sha256>"
+# (scripts/ci/validate-jetstack-charts.sh), the way to fill CHART_DIGESTS
+# after a version bump.
 # Never applies anything.
 set -euo pipefail
 

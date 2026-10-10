@@ -4,10 +4,13 @@
 # the verified archives with the committed values and kubeconform them.
 # Run by scripts/ci/validate-manifests.sh; never applies anything.
 #
-# A committed sha256 that does not match fails the run. While a digest is still
-# the PLACEHOLDER, the archive is pulled, rendered and validated anyway, its
-# sha256 is printed as "CHART_DIGEST <archive> <sha256>" (the source for the
-# operator who fills CHART_DIGESTS) and the run passes with a warning; only
+# A committed sha256 that does not match fails the run. A PLACEHOLDER digest
+# never reaches this script in CI: the workflow runs npm test first, and
+# tests/platform-pki-install.test.mjs fails on a PLACEHOLDER in CHART_DIGESTS.
+# Run locally after a version bump (digest set to PLACEHOLDER), the archive is
+# pulled, rendered and validated anyway, its sha256 is printed as
+# "CHART_DIGEST <archive> <sha256>" for the operator who fills CHART_DIGESTS
+# (after a second, independent pull agrees) and the run ends with a warning;
 # scripts/istio/install-mesh.sh --apply refuses a placeholder.
 # JETSTACK_CHARTS=skip (only where charts.jetstack.io is unreachable; CI never
 # sets it) checks the digest file's entries but pulls and validates nothing.

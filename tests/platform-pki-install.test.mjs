@@ -397,3 +397,20 @@ test('validate-jetstack-charts verifies against the committed digests: no warnin
     sb.cleanup();
   }
 });
+
+// CI runs `npm test` (which refuses a PLACEHOLDER, test above) before
+// validate-manifests.sh, so a placeholder never reaches the warn-and-print
+// path in CI. The scripts must say so: that path is a local step for an
+// operator filling CHART_DIGESTS after a version bump.
+test('jetstack digest scripts describe the placeholder path as local: CI fails a PLACEHOLDER at npm test', () => {
+  const wf = read('.github/workflows/mesh-manifests.yml');
+  const unit = wf.indexOf('npm test');
+  const render = wf.indexOf('bash scripts/ci/validate-manifests.sh');
+  assert.ok(unit >= 0 && render > unit, 'the workflow runs npm test before validate-manifests.sh');
+  const header = (p) => read(p).split('\n').filter((l) => l.startsWith('#')).join('\n');
+  for (const p of ['scripts/ci/validate-jetstack-charts.sh', 'scripts/ci/validate-manifests.sh', 'scripts/lib/chart-digests.sh']) {
+    const h = header(p);
+    assert.match(h, /tests\/platform-pki-install\.test\.mjs/, `${p}: names the test that fails a PLACEHOLDER in CI`);
+    assert.doesNotMatch(h, /passes with a warning; only|^# CI only\./m, `${p}: still claims a PLACEHOLDER passes CI`);
+  }
+});
