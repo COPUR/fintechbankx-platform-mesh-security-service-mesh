@@ -152,35 +152,9 @@ apply_banking_config() {
     fi
 }
 
-# Install observability tools
-install_observability_tools() {
-    log_info "Installing banking observability tools..."
-    
-    # Install Jaeger
-    log_info "Installing Jaeger for distributed tracing..."
-    kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/jaeger.yaml
-    
-    # Install Prometheus
-    log_info "Installing Prometheus for metrics collection..."
-    kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/prometheus.yaml
-    
-    # Install Grafana
-    log_info "Installing Grafana for metrics visualization..."
-    kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/grafana.yaml
-    
-    # Install Kiali for service mesh visualization
-    log_info "Installing Kiali for service mesh visualization..."
-    kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/kiali.yaml
-    
-    # Wait for observability tools to be ready
-    log_info "Waiting for observability tools to be ready..."
-    kubectl wait --for=condition=Ready pods -l app=jaeger -n ${ISTIO_NAMESPACE} --timeout=300s || log_warning "Jaeger may not be ready"
-    kubectl wait --for=condition=Ready pods -l app=prometheus -n ${ISTIO_NAMESPACE} --timeout=300s || log_warning "Prometheus may not be ready"
-    kubectl wait --for=condition=Ready pods -l app=grafana -n ${ISTIO_NAMESPACE} --timeout=300s || log_warning "Grafana may not be ready"
-    kubectl wait --for=condition=Ready pods -l app=kiali -n ${ISTIO_NAMESPACE} --timeout=300s || log_warning "Kiali may not be ready"
-    
-    log_success "Banking observability tools installed"
-}
+# Prometheus, Grafana, Jaeger and Kiali-like tooling is not installed here: it
+# is owned by the observability platform repository. This script no longer
+# applies Istio sample add-ons from raw GitHub URLs.
 
 # Create banking service accounts
 create_service_accounts() {
@@ -262,11 +236,8 @@ display_access_info() {
     fi
     
     echo ""
-    echo "=== Observability Access ==="
-    echo "To access Grafana: kubectl port-forward svc/grafana 3000:3000 -n istio-system"
-    echo "To access Jaeger: kubectl port-forward svc/tracing 16686:80 -n istio-system"
-    echo "To access Kiali: kubectl port-forward svc/kiali 20001:20001 -n istio-system"
-    echo "To access Prometheus: kubectl port-forward svc/prometheus 9090:9090 -n istio-system"
+    echo "=== Observability ==="
+    echo "Metrics, dashboards and tracing are installed from the observability platform repository."
     
     echo ""
     echo "=== Security Information ==="
@@ -285,12 +256,6 @@ cleanup() {
         kubectl delete -f "${K8S_DIR}/istio/istio-security-policies.yaml" --ignore-not-found=true
         kubectl delete -f "${K8S_DIR}/istio/banking-service-mesh.yaml" --ignore-not-found=true
         kubectl delete -f "${K8S_DIR}/istio/istio-installation.yaml" --ignore-not-found=true
-        
-        # Remove observability tools
-        kubectl delete -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/kiali.yaml --ignore-not-found=true
-        kubectl delete -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/grafana.yaml --ignore-not-found=true
-        kubectl delete -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/prometheus.yaml --ignore-not-found=true
-        kubectl delete -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/jaeger.yaml --ignore-not-found=true
         
         # Uninstall Istio
         istioctl uninstall --purge -y
@@ -318,7 +283,6 @@ main() {
     create_namespaces
     install_istio_components
     apply_banking_config
-    install_observability_tools
     create_service_accounts
     verify_installation
     display_access_info

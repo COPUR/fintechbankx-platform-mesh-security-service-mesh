@@ -176,8 +176,8 @@ charts assume ConfigMap `rds-ca-bundle` and ClusterIssuer
 | Step | What | Readiness wait |
 |---|---|---|
 | 0 | Preflight: External Secrets Operator CRDs present (ESO is installed outside this repo) | `kubectl get crd` |
-| 1 | `jetstack/cert-manager` `v1.18.6`, ns `cert-manager`, values `deploy/cert-manager/helm/cert-manager.values.yaml` | `helm --wait` (incl. startupapicheck), CRDs Established, three Deployments Available |
-| 2 | `jetstack/trust-manager` `v0.19.0`, ns `cert-manager`, values `deploy/cert-manager/helm/trust-manager.values.yaml` | `helm --wait`, CRD `bundles.trust.cert-manager.io` Established, Deployment Available |
+| 1 | `jetstack/cert-manager` `v1.19.6`, ns `cert-manager`, values `deploy/cert-manager/helm/cert-manager.values.yaml` | `helm --wait` (incl. startupapicheck), CRDs Established, three Deployments Available |
+| 2 | `jetstack/trust-manager` `v0.20.3`, ns `cert-manager`, values `deploy/cert-manager/helm/trust-manager.values.yaml` | `helm --wait`, CRD `bundles.trust.cert-manager.io` Established, Deployment Available |
 | 3 | `kubectl apply --server-side -k deploy/kustomize/platform-pki/<env>` | ClusterSecretStore and ExternalSecret Ready, ClusterIssuer Ready, both Bundles Synced |
 | 4 | Istio base, istiod, mesh overlay, ingress gateway | `helm --wait` |
 | 5 | ConfigMap `rds-ca-bundle` present in every namespace labelled `fintechbankx.io/namespace-kind` `service` or `platform` | polls up to 5 minutes |
@@ -191,13 +191,14 @@ trust-manager: trust namespace `cert-manager` (where `amazon-rds-ca-source`,
 `defaultPackage.enabled: false` (no Bundle uses `useDefaultCAs`), 2 replicas
 and a PDB.
 
-Why these versions: cert-manager 1.18 is the newest line whose e2e matrix
-covers Kubernetes 1.30 (1.29 to 1.33; 1.19 starts at 1.31), and trust-manager
-v0.19.0 is the newest release whose matrix covers 1.30 (v0.20 starts at 1.31).
-Both serve the APIs used here (`cert-manager.io/v1` ClusterIssuer,
-`trust.cert-manager.io/v1alpha1` Bundle). cert-manager 1.18 is past its
-upstream support window: move both to supported lines when the clusters leave
-Kubernetes 1.30.
+Why these versions: the target is EKS 1.31 (terraform-modules
+`modules/eks-cluster` default; validation `K8S_VERSION` is 1.31.0).
+cert-manager 1.19.6 is the newest 1.19 patch; its e2e matrix covers
+Kubernetes 1.31 to 1.34 (1.20 starts at 1.32). trust-manager v0.20.3 is the
+newest v0.20 patch; its kind matrix starts at 1.31. Both serve the APIs used
+here (`cert-manager.io/v1` ClusterIssuer, `trust.cert-manager.io/v1alpha1`
+Bundle) and accept the committed values files unchanged. Move both to the
+next lines when the clusters leave Kubernetes 1.31.
 
 The platform PKI resources render twice: in `platform-pki/<env>` (step 3) and
 in the mesh overlay (step 4). `components/platform-params` substitutes them in

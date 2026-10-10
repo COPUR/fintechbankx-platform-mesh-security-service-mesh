@@ -1,9 +1,9 @@
 # jetstack/cert-manager (version in ../CERT_MANAGER_VERSION) - platform
 # install values (Proposed). Installed by scripts/istio/install-mesh.sh before
 # trust-manager, the platform PKI (deploy/kustomize/platform-pki/<env>) and
-# Istio. v1.18 is the newest cert-manager line whose e2e matrix covers
-# Kubernetes 1.30 (1.29 to 1.33); v1.19 starts at 1.31. Move to a supported
-# line when the clusters leave 1.30.
+# Istio. v1.19 is the newest cert-manager line whose e2e matrix covers
+# Kubernetes 1.31 (the target EKS version; 1.31 to 1.34). v1.20 and later
+# start at 1.32.
 #
 # Only a CA ClusterIssuer (fintechbankx-internal-ca) is used; no ACME.
 # Namespace cert-manager is not injected and has no default-deny

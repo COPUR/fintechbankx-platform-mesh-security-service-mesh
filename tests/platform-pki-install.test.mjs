@@ -34,10 +34,10 @@ const indexOf = (steps, re, from = 0) => {
 test('chart versions are pinned to exact releases', () => {
   assert.match(CERT_MANAGER_VERSION, PINNED);
   assert.match(TRUST_MANAGER_VERSION, PINNED);
-  // Newest lines whose e2e matrices cover Kubernetes 1.30 (the validated
-  // K8S_VERSION); trust-manager v0.19 serves Bundle trust.cert-manager.io/v1alpha1.
-  assert.match(CERT_MANAGER_VERSION, /^v1\.18\./);
-  assert.match(TRUST_MANAGER_VERSION, /^v0\.19\./);
+  // Newest lines whose e2e matrices cover Kubernetes 1.31 (the validated
+  // K8S_VERSION); trust-manager v0.20 serves Bundle trust.cert-manager.io/v1alpha1.
+  assert.match(CERT_MANAGER_VERSION, /^v1\.19\./);
+  assert.match(TRUST_MANAGER_VERSION, /^v0\.20\./);
 });
 
 for (const env of ENVS) {

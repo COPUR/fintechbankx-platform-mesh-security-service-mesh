@@ -17,7 +17,7 @@ KUSTOMIZE="${KUSTOMIZE:-kustomize}"
 KUBECONFORM="${KUBECONFORM:-kubeconform}"
 HELM="${HELM:-helm}"
 ISTIOCTL="${ISTIOCTL:-istioctl}"
-K8S_VERSION="${K8S_VERSION:-1.30.0}"
+K8S_VERSION="${K8S_VERSION:-1.31.0}"
 ISTIO_VERSION="$(tr -d '[:space:]' < "$ROOT/deploy/istio/ISTIO_VERSION")"
 CERT_MANAGER_VERSION="$(tr -d '[:space:]' < "$ROOT/deploy/cert-manager/CERT_MANAGER_VERSION")"
 TRUST_MANAGER_VERSION="$(tr -d '[:space:]' < "$ROOT/deploy/cert-manager/TRUST_MANAGER_VERSION")"
@@ -91,7 +91,7 @@ else
     --kube-version "$K8S_VERSION" -f "$P/cert-manager.values.yaml" > "$OUT/cert-manager.yaml"
   "$HELM" template trust-manager "$CHARTS/trust-manager-$TRUST_MANAGER_VERSION.tgz" -n cert-manager \
     --kube-version "$K8S_VERSION" -f "$P/trust-manager.values.yaml" > "$OUT/trust-manager.yaml"
-  grep -q 'name: certificates.cert-manager.io' "$OUT/cert-manager.yaml" \
+  grep -Eq 'name: "?certificates\.cert-manager\.io"?$' "$OUT/cert-manager.yaml" \
     || { echo "cert-manager: CRDs not rendered (crds.enabled)" >&2; exit 1; }
   grep -q 'bundles.trust.cert-manager.io' "$OUT/trust-manager.yaml" \
     || { echo "trust-manager: Bundle CRD not rendered (crds.enabled)" >&2; exit 1; }
