@@ -94,10 +94,13 @@ Only values backed by the dependency-resilience policy pack are set:
 
 ### Database migration Jobs (Proposed)
 
-Each service runs Flyway in a Helm `pre-install,pre-upgrade` hook Job, never in
-the API pods (cicd-templates 335a345). The Job pods carry the service's
-`app.kubernetes.io/name` and `app.kubernetes.io/component=db-migration`; the API
-pods carry `component=service`.
+Nine service charts run Flyway in a Helm `pre-install,pre-upgrade` hook Job,
+never in the API containers (cicd-templates 335a345). The Job pods carry the
+service's `app.kubernetes.io/name` and `app.kubernetes.io/component=db-migration`;
+the API pods carry `component=service`. ATM directory, payee verification and
+products run Flyway in a `migrate` init container of their meshed Deployment
+pod instead (no separate workload, nothing extra to model); the three
+DocumentDB data services render no migration.
 
 - `allow-egress-aurora` (and DocumentDB, Redis) select on the name only, so the
   Job reaches its service's database.
@@ -105,29 +108,53 @@ pods carry `component=service`.
   pod, or any pod without the component label, never reaches the brokers.
   Every service chart must label its API pods `app.kubernetes.io/component:
   service`; a chart without it loses MSK egress (fail closed).
-- Customer, risk and compliance run their Jobs **without** a sidecar (CRC
-  branch `claude/customer-risk-compliance-deployable-ygi0zo`, each chart's
-  `templates/migration-job.yaml:39-49`: `sidecar.istio.io/inject: "false"`
-  written after `podLabels`), each as its own ServiceAccount
-  `<service>-db-migration` with no token and no IAM role. The contract lists
-  them as `role: db-migration` workloads
-  (`customer/customer-profile-kyc-service-db-migration`,
-  `risk/risk-decisioning-service-db-migration`,
-  `compliance/compliance-evidence-service-db-migration`; `migrates: <service>`,
-  selector name + component, `sidecar: false`, Aurora only), each with an
-  `exceptions.workloadInjection` entry (validator R9). The services'
-  Deployments keep their sidecars. This mesh does not need the opt-out
-  (native sidecars let a Job complete); it is the owner's choice.
+- All nine hook Jobs run **without** a sidecar (`sidecar.istio.io/inject:
+  "false"` on the pod, read from each chart rendered with its own CI args at
+  the PR heads below) and each is a `role: db-migration` workload in the
+  contract (`migrates: <service>`, selector name + component, `sidecar:
+  false`, Aurora only) with an `exceptions.workloadInjection` entry
+  (validator R9). The services' Deployments keep their sidecars. This mesh
+  does not need the opt-out (istiod injects native sidecars); it is the
+  owners' choice.
+
+  | Contract workload | Chart (head) | Runs as |
+  |---|---|---|
+  | `customer/customer-profile-kyc-service-db-migration` | customer (CRC branch) | own ServiceAccount `<service>-db-migration`, no token |
+  | `risk/risk-decisioning-service-db-migration` | risk (CRC branch) | own ServiceAccount, no token |
+  | `compliance/compliance-evidence-service-db-migration` | compliance (CRC branch) | own ServiceAccount, no token |
+  | `lending/loan-lifecycle-service-db-migration` | loan 629444d | namespace `default` ServiceAccount, `automountServiceAccountToken: false` |
+  | `payments/payment-initiation-settlement-service-db-migration` | initiation 9671414 | namespace `default`, no token |
+  | `payments/payment-request-to-pay-service-db-migration` | request to pay 2cd8e3c | namespace `default`, no token |
+  | `payments/payment-recurring-mandates-service-db-migration` | recurring mandates ceb45b5 | namespace `default`, no token |
+  | `payments/payment-bulk-orchestration-service-db-migration` | bulk orchestration fe1d583 | namespace `default`, no token |
+  | `open-finance/consent-authorization-service-migrate` | consent e4f56b1 | namespace `default`, no token |
+
+  A Job without `serviceAccountName` runs as the namespace `default`
+  ServiceAccount; the contract records that as `serviceAccount: default` plus
+  the Job's name as the workload `name`. That account is shared by every pod
+  of the namespace without one, so it is never an identity: the renderer
+  accepts it only on a sidecar-less Job with a name of its own, refuses an
+  edge naming `<namespace>/default`, and it is no known service account or
+  principal (`checkNamespaceDefaultServiceAccount`). None of these Jobs has
+  an IAM role or a token, and none calls an AWS API: each mounts its hook
+  Secret (the owner credential ESO syncs from `<env>/<service>/db-migration`)
+  and the `rds-ca-bundle` ConfigMap, and opens JDBC to `DB_URL` with that
+  password (no IAM database authentication, no STS, no Secrets Manager call
+  from the pod). The Java services' `migrate` mode starts a Spring context
+  with only the DataSource and Flyway auto-configuration; consent runs plain
+  Flyway (`DatabaseMigrationCommand`).
 - A sidecar-less Job pod gets `allow-egress-dns` and its service's name-keyed
   `allow-egress-aurora` (5432 to `AURORA_CIDR`, the policy its API pods use)
   and nothing else. Every other NetworkPolicy of its namespace that could
   select it excludes `component=db-migration` (`NotIn`): `allow-egress-istiod`,
   `allow-egress-vpc-https`, `allow-ingress-node-health`,
   `allow-ingress-observability-scrape`, `allow-ingress-from-<namespace>` and
-  the service's edge egress to identity and observability. So: no istiod, no
-  VPC endpoints, no MSK, no east-west, no ingress. The rule is the same one
-  the products history-guard check pods use (below); it applies to any
-  `role: db-migration` or `role: history-guard-check` workload with
+  the service's edge egress (identity and observability for every service;
+  also customer for loan, and customer, risk, compliance and open-finance
+  for payment initiation, open-finance for bulk and mandates). So: no
+  istiod, no VPC endpoints, no MSK, no east-west, no ingress. The rule is the
+  same one the products history-guard check pods use (below); it applies to
+  any `role: db-migration` or `role: history-guard-check` workload with
   `sidecar: false`, and a store policy excludes only the Jobs that do not
   declare that store. No pod without that component label, and nothing
   outside these namespaces, changes.
@@ -142,23 +169,21 @@ pods carry `component=service`.
   and reads `<env>/<service>/db-migration`). The renderer refuses a migration
   workload with MSK, a looser selector, an `apiPrefix`/`serviceId`, a
   DestinationRule, `sidecar: true` or an edge; a migration workload without
-  `sidecar` (native sidecar) still renders with istiod egress and never MSK
-  (`tests/migration-job-egress.test.mjs`,
+  `sidecar` (native sidecar) on a ServiceAccount of its own still renders
+  with istiod egress and never MSK (`tests/migration-job-egress.test.mjs`,
   `tests/sidecarless-migration-job-egress.test.mjs`).
 - The exclusion is by component alone (one selector cannot say NOT (name AND
   component)), so a meshed Job with the component of a sidecar-less Job in the
   same namespace would lose istiod, VPC endpoints and ingress with it. The
   renderer refuses that mix (`checkSidecarLessJobComponents`): either every
   `db-migration` Job of a namespace runs without a sidecar, or the
-  sidecar-less Job pods carry a component label of their own. This matters
-  for payments, where request-to-pay's migration Job is meshed by default
-  while the other services' Jobs opt out.
-- The other services' Jobs (loan-lifecycle, payment initiation/settlement,
-  request-to-pay, recurring mandates, bulk orchestration, consent
-  authorization) run as the namespace `default` ServiceAccount with no token
-  and have no contract entry; Aurora egress reaches them by the name label,
-  and so do the namespace-wide policies. Several of them also run without a
-  sidecar (open ask: model them the same way).
+  sidecar-less Job pods carry a component label of their own. In payments
+  all four Jobs are sidecar-less (request to pay since 2cd8e3c), so the
+  shared component is fine. Loan and the three other payments charts take
+  the opt-out from `migration.istioSidecar` (default `false`): a chart that
+  sets it `true` must also get the contract entry changed (a ServiceAccount
+  of its own and no `sidecar: false`), and in payments the other three Jobs
+  with it, or the render fails.
 
 **Drill checklist for the first dev-cluster install** (not run yet; record the
 evidence with the install log). Use `helm upgrade --install ... --timeout 15m`
