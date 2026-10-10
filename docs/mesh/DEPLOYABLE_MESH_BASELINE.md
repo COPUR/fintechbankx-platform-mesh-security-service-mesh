@@ -135,14 +135,19 @@ DocumentDB data services render no migration.
   of the namespace without one, so it is never an identity: the renderer
   accepts it only on a sidecar-less Job with a name of its own, refuses an
   edge naming `<namespace>/default`, and it is no known service account or
-  principal (`checkNamespaceDefaultServiceAccount`). None of these Jobs has
-  an IAM role or a token, and none calls an AWS API: each mounts its hook
-  Secret (the owner credential ESO syncs from `<env>/<service>/db-migration`)
-  and the `rds-ca-bundle` ConfigMap, and opens JDBC to `DB_URL` with that
-  password (no IAM database authentication, no STS, no Secrets Manager call
-  from the pod). The Java services' `migrate` mode starts a Spring context
-  with only the DataSource and Flyway auto-configuration; consent runs plain
-  Flyway (`DatabaseMigrationCommand`).
+  principal (`checkNamespaceDefaultServiceAccount`). With one ServiceAccount
+  for four payments Jobs, the name alone tells them apart: the renderer
+  refuses a workload reference `<namespace>/<name>` that two workloads use
+  (`checkWorkloadReferences`: both would resolve to the first one's
+  selector, so the policies keyed on the second Job's service would not
+  exclude its pods), and validator R9 refuses one exception covering two
+  workloads. None of these Jobs has an IAM role or a token, and none calls an
+  AWS API: each mounts its hook Secret (the owner credential ESO syncs from
+  `<env>/<service>/db-migration`) and the `rds-ca-bundle` ConfigMap, and
+  opens JDBC to `DB_URL` with that password (no IAM database authentication,
+  no STS, no Secrets Manager call from the pod). The Java services'
+  `migrate` mode starts a Spring context with only the DataSource and Flyway
+  auto-configuration; consent runs plain Flyway (`DatabaseMigrationCommand`).
 - A sidecar-less Job pod gets `allow-egress-dns` and its service's name-keyed
   `allow-egress-aurora` (5432 to `AURORA_CIDR`, the policy its API pods use)
   and nothing else. Every other NetworkPolicy of its namespace that could

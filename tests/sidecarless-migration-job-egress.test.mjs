@@ -363,6 +363,52 @@ test('the namespace default ServiceAccount is never an identity', () => {
   assert.doesNotThrow(() => render(contract));
 });
 
+// A workload reference <ns>/<name> (name defaults to the service account)
+// keys the policies, exceptions and edges of one workload, and resolveWorkload
+// returns the first workload with that reference. The four payments Jobs all
+// run as serviceAccount default, so their names alone tell them apart: a name
+// used twice resolves both Jobs to the first one's selector, so the policies
+// keyed on the second Job's service do not exclude its pods (request to pay's
+// Job pod keeps that service's east-west egress), and one R9 exception would
+// cover both Jobs. Every reference belongs to one workload of its namespace.
+test('a workload reference belongs to one workload of its namespace', () => {
+  const rtp = DEFAULT_SA.find((j) => j.owner === 'payment-request-to-pay-service');
+  const initiationJob = DEFAULT_SA.find((j) => j.owner === 'payment-initiation-settlement-service').name;
+  const deployable = loadRepoDocs().filter((d) => ['deploy/', 'k8s/platform/'].some((x) => d.file.startsWith(x)));
+  const renamed = (to, keepException) => {
+    const c = structuredClone(contract);
+    workload(c, rtp).name = to;
+    const x = c.exceptions.workloadInjection.find((e) => e.workload === `${rtp.ns}/${rtp.name}`);
+    if (keepException) x.workload = `${rtp.ns}/${to}`;
+    else c.exceptions.workloadInjection = c.exceptions.workloadInjection.filter((e) => e !== x);
+    return c;
+  };
+  const shared = (ref) => new RegExp(`${ref.replace('/', '\\/')}: 2 workloads of ${ref.split('/')[0]} use this reference`);
+
+  // Request to pay's Job named after the initiation Job: two default-ServiceAccount Jobs, one reference.
+  assert.throws(() => render(renamed(initiationJob, true)), shared(`payments/${initiationJob}`));
+  assert.throws(() => render(renamed(initiationJob, false)), shared(`payments/${initiationJob}`));
+  // R9: the initiation Job's exception does not cover a second workload of that name.
+  assert.ok(
+    checkZeroTrust(deployable, renamed(initiationJob, false)).some((e) => e.startsWith(`R9 payments/${initiationJob}`)),
+    'R9 accepts one exception for two workloads',
+  );
+  // Named after the request to pay API workload (reference payments/payment-request-to-pay-service):
+  // refused for the shared reference, not only because a migration Job is in no call edge.
+  assert.throws(() => render(renamed(rtp.owner, true)), shared(`payments/${rtp.owner}`));
+  // Any role: the products guard check named after consent's migration Job.
+  const guard = structuredClone(contract);
+  const consentJob = DEFAULT_SA.find((j) => j.owner === 'consent-authorization-service').name;
+  const check = guard.namespaces.find((n) => n.name === 'open-finance').workloads.find((w) => w.role === 'history-guard-check');
+  guard.exceptions.workloadInjection = guard.exceptions.workloadInjection.filter((e) => e.workload !== `open-finance/${check.name}`);
+  check.name = consentJob;
+  assert.throws(() => render(guard), shared(`open-finance/${consentJob}`));
+  assert.ok(checkZeroTrust(deployable, guard).some((e) => e.startsWith(`R9 open-finance/${consentJob}`)));
+
+  assert.doesNotThrow(() => render(contract));
+  assert.deepEqual(checkZeroTrust(deployable, contract).filter((e) => e.startsWith('R9')), []);
+});
+
 // The namespace-wide policies exclude a sidecar-less Job by component only
 // (one selector cannot say NOT (name=X AND component=Y)). A meshed Job with the
 // same component in the same namespace would lose istiod, VPC endpoints and

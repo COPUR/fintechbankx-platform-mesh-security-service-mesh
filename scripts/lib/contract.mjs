@@ -87,8 +87,9 @@ export function serviceWorkloads(contract) {
  * The namespace's `default` ServiceAccount: what a pod runs as when its spec
  * names none. Every such pod of the namespace shares it, so it is never an
  * identity: only a sidecar-less Job (no principal) with a workload `name` of
- * its own may declare it (checkNamespaceDefaultServiceAccount), and it is no
- * known service account or principal.
+ * its own may declare it (checkNamespaceDefaultServiceAccount; no other
+ * workload of the namespace may use that name: checkWorkloadReferences), and
+ * it is no known service account or principal.
  */
 export const NAMESPACE_DEFAULT_SA = 'default';
 

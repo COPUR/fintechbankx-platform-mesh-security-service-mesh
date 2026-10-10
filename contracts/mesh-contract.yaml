@@ -131,7 +131,10 @@ gateway:
 # `serviceAccount: default` is the namespace default ServiceAccount (the pod
 # spec names none), allowed only on a sidecar-less Job with a `name` of its
 # own (the renderer refuses anything else: that account is shared by every
-# pod without one, so it is never an identity or principal).
+# pod without one, so it is never an identity or principal). A workload's
+# reference <namespace>/<name> (name defaults to serviceAccount) belongs to
+# that workload alone: the renderer refuses a reference two workloads of a
+# namespace use, and validator R9 an exception that would cover both.
 namespaces:
   - name: lending
     context: lending

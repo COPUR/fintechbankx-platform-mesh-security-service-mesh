@@ -21,7 +21,8 @@
 //  R8 generated manifests match the contract rendering.
 //  R9 every workload declared without a sidecar is listed in
 //     exceptions.workloadInjection (e.g. the open-finance products
-//     history-guard check pods, scoped by name + component).
+//     history-guard check pods, scoped by name + component), under a
+//     reference <ns>/<name> no other workload of its namespace uses.
 //  R10 secret scoping (contract `secrets`): the service ClusterSecretStore has
 //     conditions selecting only service namespaces and the shared namespaces;
 //     the platform store names only the platform-store namespaces and uses its
@@ -265,10 +266,14 @@ export function checkZeroTrust(docs, contract) {
   // R9
   const excepted = new Set((contract.exceptions?.workloadInjection || []).map((x) => x.workload));
   for (const n of contract.namespaces) {
-    for (const w of n.workloads || []) {
-      const ref = `${n.name}/${w.name || w.serviceAccount}`;
-      if (w.sidecar === false && !excepted.has(ref)) {
+    const refs = (n.workloads || []).map((w) => `${n.name}/${w.name || w.serviceAccount}`);
+    for (const [i, w] of (n.workloads || []).entries()) {
+      const ref = refs[i];
+      if (w.sidecar !== false) continue;
+      if (!excepted.has(ref)) {
         errors.push(`R9 ${ref} runs without a sidecar but has no exceptions.workloadInjection entry`);
+      } else if (refs.filter((r) => r === ref).length > 1) {
+        errors.push(`R9 ${ref} runs without a sidecar and another workload of ${n.name} uses the same reference; its exception must name one workload`);
       }
     }
   }

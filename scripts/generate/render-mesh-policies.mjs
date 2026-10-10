@@ -1159,6 +1159,35 @@ function externalSecretAdmission(contract) {
   return [policy, binding];
 }
 
+// ----------------------------------------------------- workload references
+// A workload reference <ns>/<name> (name defaults to the service account)
+// keys a workload's policies, its exceptions.workloadInjection entry and its
+// edges, and resolveWorkload returns the first workload with that reference.
+// Two workloads with one reference would both resolve to the first one's
+// selector: a second sidecar-less Job's pods would not be excluded from the
+// policies keyed on its service's name (they keep that service's east-west
+// egress), and one exception would cover both.
+// Workloads that share a service account (the namespace default
+// ServiceAccount, Tempo, Loki) each need a name no other workload of the
+// namespace uses.
+export function checkWorkloadReferences(contract) {
+  for (const n of contract.namespaces) {
+    const count = new Map();
+    for (const w of n.workloads || []) {
+      const name = w.name || w.serviceAccount;
+      count.set(name, (count.get(name) || 0) + 1);
+    }
+    for (const [name, k] of count) {
+      if (k > 1) {
+        throw new Error(
+          `${n.name}/${name}: ${k} workloads of ${n.name} use this reference; give each a workload name of its own ` +
+            '(policies, exceptions and edges resolve a reference to one workload)',
+        );
+      }
+    }
+  }
+}
+
 // ------------------------------------------------------------ migration jobs
 // A `role: db-migration` workload is a service's Flyway migration Job (Helm
 // pre-install/pre-upgrade hook), run as a service account of its own or as
@@ -1248,8 +1277,10 @@ export function checkGuardCheckJobs(contract) {
 // one (the lending and payments migration Jobs, consent's migrate Job), and so
 // does every other such pod of the namespace. It is never an identity: only a
 // sidecar-less Job (no sidecar, so no principal) with a workload name of its
-// own may declare it, and no edge may name <ns>/default. A meshed workload
-// needs a ServiceAccount of its own, or its principal would be shared.
+// own (not `default`, and used by no other workload of the namespace:
+// checkWorkloadReferences) may declare it, and no edge may name <ns>/default.
+// A meshed workload needs a ServiceAccount of its own, or its principal would
+// be shared.
 export function checkNamespaceDefaultServiceAccount(contract) {
   for (const n of contract.namespaces) {
     for (const w of (n.workloads || []).filter((x) => x.serviceAccount === NAMESPACE_DEFAULT_SA)) {
@@ -1308,6 +1339,7 @@ export function checkSidecarLessJobComponents(contract) {
 
 // --------------------------------------------------------------------- write
 export function render(contract = loadContract()) {
+  checkWorkloadReferences(contract);
   checkMigrationJobs(contract);
   checkGuardCheckJobs(contract);
   checkNamespaceDefaultServiceAccount(contract);
