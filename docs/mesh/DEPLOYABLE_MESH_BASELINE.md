@@ -338,23 +338,28 @@ files, never from a repository reference. `scripts/ci/validate-jetstack-charts.s
 `helm template`, and a committed digest that does not match fails CI;
 `JETSTACK_CHARTS=skip` checks only that the file names both archives.
 
-**The digests are not known yet.** The file holds a marked `PLACEHOLDER` for
-both archives: the authoring session could not reach `charts.jetstack.io`,
-`quay.io/jetstack` (OCI) or a GitHub release asset, so it could not hash the
-published archives. Until an operator fills both lines, `install-mesh.sh
---apply` fails closed. CI does not go red on the placeholder: it still pulls,
-renders and validates both charts, warns that they are NOT verified, and prints
-`CHART_DIGEST <archive> <sha256>` for each (`grep '^CHART_DIGEST '` in the
-validate-manifests log). The operator, or the platform thread reading that
-log, copies the values into the file after a second, independent pull on a
-trusted network agrees (steps in the file). A version bump must change the
-digest lines in the same commit (`tests/platform-pki-install.test.mjs` checks
-the names against the version files).
+**Where the digests come from.** The committed values are the
+`CHART_DIGEST <archive> <sha256>` lines that `validate-jetstack-charts.sh`
+printed while the file still held a placeholder, from two CI pulls of the
+published archives on `charts.jetstack.io`: workflow "Mesh Manifests" run
+38049446800 on commit 07af60a, attempt 1 (job 114205447335, 2026-10-10 11:44Z)
+and attempt 2 (job 114240325299, 2026-10-10 14:54Z), on different GitHub-hosted
+runners. Both attempts printed the same sha256 for both archives:
 
-Not verified: no cluster install has been run. When this was written,
-`validate-manifests.sh` had only run against charts assembled from the tagged
-sources; the first CI run with filled digests is the first validation of the
-published archives.
+| Archive | sha256 |
+|---|---|
+| `cert-manager-v1.19.6.tgz` | `da30bd46705092fdc086571f1dfa18bd626872966eb70cd99fc7bf8f1165a850` |
+| `trust-manager-v0.20.3.tgz` | `8b238bdeaa70d4f5d7379256335522bb7c4e84867764e4fbb95896e1bce1aa84` |
+
+`install-mesh.sh --apply` now passes its digest preflight and installs only
+archives that match; CI verifies every pull against them (a mismatch fails
+before `helm template`). The placeholder path in `scripts/lib/chart-digests.sh`
+stays for a version bump, but `tests/platform-pki-install.test.mjs` refuses a
+committed placeholder, so a bump needs both pulls before it is committed (steps
+in the file). Both pulls ran on GitHub-hosted runners; no pull from a network
+outside GitHub has been compared yet.
+
+Not verified: no cluster install has been run.
 
 ## Validation
 

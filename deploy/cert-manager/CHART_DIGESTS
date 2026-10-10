@@ -2,28 +2,28 @@
 #   helm pull jetstack/<chart> --version <version>     (https://charts.jetstack.io)
 # in `sha256sum -c` format: "<64 lower-case hex>  <archive file name>", one line
 # per archive. The names follow CERT_MANAGER_VERSION and TRUST_MANAGER_VERSION;
-# a version bump changes the name and needs a new digest in the same commit.
+# a version bump changes the name and needs a new digest in the same commit
+# (tests/platform-pki-install.test.mjs refuses a placeholder here).
 #
 # scripts/istio/install-mesh.sh pulls both archives, checks them against these
 # lines (sha256sum -c) and installs from the verified local files only.
 # scripts/ci/validate-jetstack-charts.sh (run by validate-manifests.sh in CI)
 # verifies them the same way before helm template; a mismatch fails CI.
 #
-# PLACEHOLDER - NOT A DIGEST. The session that added this file could not reach
-# charts.jetstack.io, quay.io/jetstack (OCI) or a GitHub release asset, so it
-# could not hash the published archives. Until an operator replaces both
-# PLACEHOLDER values, install-mesh.sh --apply fails closed. CI still pulls,
-# renders and validates the charts, passes with a warning and prints each
-# archive's sha256 as a line "CHART_DIGEST <archive> <sha256>" in the
-# validate-manifests log.
+# Source of the values below: two pulls of the published archives from
+# charts.jetstack.io by CI, workflow "Mesh Manifests" run 38049446800 on commit
+# 07af60a (CHART_DIGEST lines of scripts/ci/validate-jetstack-charts.sh):
+#   attempt 1, job 114205447335, 2026-10-10 11:44Z, runner 1000010135
+#   attempt 2, job 114240325299, 2026-10-10 14:54Z, runner 1000010329
+# Both printed the same sha256 for both archives. Both pulls ran on
+# GitHub-hosted runners; no pull from a network outside GitHub has been
+# compared yet (the authoring session cannot reach charts.jetstack.io).
 #
-# To fill: take the CHART_DIGEST lines from a CI run (or the platform thread's
-# reading of it) and confirm them with a second, independent pull on a trusted
-# network (different machine or network) - both must agree:
+# To re-check or to fill after a version bump, pull twice on independent
+# machines and compare:
 #   helm repo add jetstack https://charts.jetstack.io --force-update
 #   helm pull jetstack/cert-manager --version v1.19.6 -d ./charts
 #   helm pull jetstack/trust-manager --version v0.20.3 -d ./charts
 #   (cd ./charts && sha256sum cert-manager-v1.19.6.tgz trust-manager-v0.20.3.tgz)
-# then replace the two lines below and record both pulls in the PR.
-PLACEHOLDER  cert-manager-v1.19.6.tgz
-PLACEHOLDER  trust-manager-v0.20.3.tgz
+da30bd46705092fdc086571f1dfa18bd626872966eb70cd99fc7bf8f1165a850  cert-manager-v1.19.6.tgz
+8b238bdeaa70d4f5d7379256335522bb7c4e84867764e4fbb95896e1bce1aa84  trust-manager-v0.20.3.tgz

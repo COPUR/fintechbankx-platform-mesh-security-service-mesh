@@ -338,3 +338,62 @@ test('validate-jetstack-charts: a PLACEHOLDER renders, prints CHART_DIGEST and p
     assert.notEqual(run(`TODO  ${ARCHIVES[0]}\nPLACEHOLDER  ${ARCHIVES[1]}\n`, env).status, 0);
   }
 });
+
+// ------------------------------------------- committed digests (published archives)
+// The values come from two CI pulls of the published archives (Mesh Manifests
+// run 38049446800, attempt 1 at 2026-10-10T11:44Z and attempt 2 at 14:54Z, on
+// different runners), whose CHART_DIGEST lines agree.
+const committedDigests = () => digestLines(read('deploy/cert-manager/CHART_DIGESTS'));
+
+test('committed CHART_DIGESTS holds a sha256 for exactly the pinned archives and no PLACEHOLDER', () => {
+  const text = read('deploy/cert-manager/CHART_DIGESTS');
+  const lines = committedDigests();
+  assert.equal(lines.length, 2, lines.map((l) => l.join(' ')).join('\n'));
+  assert.deepEqual(lines.map(([, name]) => name), ARCHIVES);
+  for (const l of lines) {
+    assert.equal(l.length, 2, l.join(' '));
+    assert.match(l[0], SHA256, l[1]);
+  }
+  assert.notEqual(lines[0][0], lines[1][0]);
+  assert.doesNotMatch(text, /PLACEHOLDER/);
+  // sha256sum -c format: digest, two spaces, archive name.
+  const entries = text.split('\n').filter((l) => l.trim() && !l.trimStart().startsWith('#'));
+  for (const l of entries) assert.match(l, /^[0-9a-f]{64} {2}(cert|trust)-manager-v\d+\.\d+\.\d+\.tgz$/, l);
+  // The file says where the values came from.
+  assert.match(text, /38049446800/);
+});
+
+test('install-mesh accepts the committed digests and still stops on an archive that does not match them', () => {
+  const sb = sandbox(); // committed CHART_DIGESTS
+  try {
+    const p = sb.runScript('scripts/istio/install-mesh.sh', ['dev']);
+    assert.equal(p.status, 0, p.stderr);
+    assert.doesNotMatch(p.stderr, /WARNING: plan only|chart digests:/);
+    // --apply passes the preflight, pulls, and refuses the stub archive (not the published one).
+    const r = sb.runScript('scripts/istio/install-mesh.sh', ['dev', '--apply']);
+    assert.notEqual(r.status, 0);
+    assert.doesNotMatch(r.stderr, /refusing --apply/);
+    assert.ok(r.calls.some((c) => c.startsWith('helm pull jetstack/cert-manager ')), r.calls.join('; '));
+    assert.match(r.stderr, /cert-manager-v[\d.]+\.tgz does not match its sha256/);
+    assert.deepEqual(mutating(r.calls), []);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test('validate-jetstack-charts verifies against the committed digests: no warning, a mismatch fails before rendering', () => {
+  const sb = sandbox();
+  try {
+    const skip = sb.runScript('scripts/ci/validate-jetstack-charts.sh', [], { OUT: join(sb.dir, 'out-skip'), JETSTACK_CHARTS: 'skip' });
+    assert.equal(skip.status, 0, skip.stderr);
+    assert.doesNotMatch(skip.stderr, /chart digests:/);
+    const r = sb.runScript('scripts/ci/validate-jetstack-charts.sh', [], { OUT: join(sb.dir, 'out') });
+    assert.notEqual(r.status, 0);
+    assert.doesNotMatch(r.stdout, /^CHART_DIGEST /m);
+    assert.doesNotMatch(r.stderr, /NOT verified|has no sha256/);
+    assert.match(r.stderr, /does not match its sha256/);
+    assert.equal(r.calls.filter((c) => c.startsWith('helm template')).length, 0);
+  } finally {
+    sb.cleanup();
+  }
+});
