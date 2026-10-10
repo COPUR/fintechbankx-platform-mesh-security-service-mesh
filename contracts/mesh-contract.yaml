@@ -57,17 +57,20 @@ gateway:
       staging: [3, 6]
       prod: [3, 12]
 
-  # Token locations the gateway RequestAuthentication validates. Istio's
-  # defaults (Authorization "Bearer ", query access_token) plus
-  # Authorization "DPoP ": TPP tokens are DPoP-bound (RFC 9449) and the
-  # rtp-cutover cohort rule (R3) routes on the validated token's azp, which
-  # the gateway only sees for tokens it validated. The gateway still checks
-  # the issuer only; the DPoP proof is checked by the service.
+  # Token locations the gateway RequestAuthentication validates:
+  # Authorization "Bearer " and "DPoP " only. TPP tokens are DPoP-bound
+  # (RFC 9449) and the rtp-cutover cohort rule (R3) routes on the validated
+  # token's azp, which the gateway only sees for tokens it validated. No
+  # query parameter (Istio's default access_token): a token in the URL leaks
+  # into logs and caches and must never select a cohort route; nothing in
+  # this repo needs one. The list must stay explicit: with no location
+  # Istio falls back to its defaults, query access_token included (the
+  # renderer refuses both while a cohort is non-empty). The gateway still
+  # checks the issuer only; the DPoP proof is checked by the service.
   tokenLocations:
     fromHeaders:
       - {name: Authorization, prefix: "Bearer "}
       - {name: Authorization, prefix: "DPoP "}
-    fromParams: [access_token]
   # Backends outside this mesh that the gateway still routes to during a
   # strangler cut-over. One explicit host each (placeholder replaced per
   # overlay from mesh-params), HTTPS originated by the gateway with the host

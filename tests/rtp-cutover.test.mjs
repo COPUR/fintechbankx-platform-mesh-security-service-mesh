@@ -142,9 +142,58 @@ test('the gateway validates DPoP-scheme tokens too, so R3 can read azp', () => {
     { name: 'Authorization', prefix: 'Bearer ' },
     { name: 'Authorization', prefix: 'DPoP ' },
   ]);
-  assert.deepEqual(rule.fromParams, ['access_token'], 'Istio default locations are kept');
+  assert.equal(rule.fromParams, undefined, 'no query-parameter token: R3 must not route on a token from the URL');
+  assert.equal(rule.fromCookies, undefined);
+  assert.ok(rule.fromHeaders.length > 0, 'with no explicit location Istio falls back to its defaults, query access_token included');
   assert.equal(rule.forwardOriginalToken, true, 'the service checks the DPoP binding itself');
   assert.equal(rule.audiences, undefined, 'the gateway checks the issuer only');
+});
+
+// Token extraction at the gateway (Istio RequestAuthentication -> Envoy
+// jwt_authn): only the configured locations are read; with none configured
+// Istio uses its defaults (Authorization "Bearer ", query access_token). A
+// token found nowhere is a missing token (allowed, no request.auth claims).
+// Tokens are modelled as their already-validated claims.
+function gatewayClaims(c, { headers = {}, query = {} }) {
+  const gw = render(c)['request-authentication.yaml'].find((d) => d.metadata.namespace === 'istio-ingress');
+  const [rule] = gw.spec.jwtRules;
+  const explicit = rule.fromHeaders || rule.fromParams || rule.fromCookies;
+  const fromHeaders = explicit ? rule.fromHeaders || [] : [{ name: 'Authorization', prefix: 'Bearer ' }];
+  const fromParams = explicit ? rule.fromParams || [] : ['access_token'];
+  for (const h of fromHeaders) {
+    const v = headers[h.name];
+    if (v && v.scheme === h.prefix) return v.claims;
+  }
+  for (const q of fromParams) if (query[q]) return query[q];
+  return {};
+}
+
+test('R3: a token in the access_token query parameter is not validated, so it never selects the cohort route', () => {
+  const c = withCohort(['tpp-pilot']);
+  const routes = apiRoutes(c);
+  const pilot = { azp: 'tpp-pilot' };
+  const viaQuery = gatewayClaims(c, { query: { access_token: pilot } });
+  assert.equal(route(routes, 'POST', '/open-finance/v1/par?access_token=x', viaQuery)?.host, LEGACY, 'query token: R4, monolith');
+  // Control: the same token in the Authorization header reaches R3.
+  assert.equal(route(routes, 'POST', '/open-finance/v1/par', gatewayClaims(c, { headers: { Authorization: { scheme: 'DPoP ', claims: pilot } } }))?.host, RTP);
+  assert.equal(route(routes, 'POST', '/open-finance/v1/par', gatewayClaims(c, { headers: { Authorization: { scheme: 'Bearer ', claims: pilot } } }))?.host, RTP);
+});
+
+test('a cohort rule refuses gateway token locations that read the URL or fall back to Istio defaults', () => {
+  for (const locations of [
+    { ...contract.gateway.tokenLocations, fromParams: ['access_token'] },
+    { ...contract.gateway.tokenLocations, fromCookies: ['token'] },
+    {},
+    undefined,
+  ]) {
+    const c = withCohort(['tpp-pilot']);
+    c.gateway.tokenLocations = locations;
+    assert.throws(() => render(c), /tokenLocations/, JSON.stringify(locations));
+    // An empty cohort renders no R3, so nothing routes on claims yet.
+    const empty = structuredClone(contract);
+    empty.gateway.tokenLocations = locations;
+    assert.doesNotThrow(() => render(empty));
+  }
 });
 
 test('cohort entries are literal client ids: no wildcard, no regex, no service or channel client', () => {

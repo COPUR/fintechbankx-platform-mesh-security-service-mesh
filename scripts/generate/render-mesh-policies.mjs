@@ -591,6 +591,17 @@ function anonymousRateLimit(contract) {
 const COHORT_CLIENT = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const NON_TPP_CLIENT = /^(svc-|fintechbankx-)/;
 
+// A cohort route trusts the claims of whatever token the gateway extracted.
+// Only Authorization headers may carry it: a query parameter (or cookie) token
+// would let a URL select the cohort, and with no explicit location Istio
+// falls back to its defaults, query access_token included.
+function assertHeaderOnlyTokens(contract, name) {
+  const l = contract.gateway.tokenLocations || {};
+  if (!(l.fromHeaders || []).length || (l.fromParams || []).length || (l.fromCookies || []).length) {
+    throw new Error(`cutover ${name}: a cohort rule needs gateway.tokenLocations with fromHeaders only (no fromParams, no fromCookies, no Istio defaults)`);
+  }
+}
+
 function cutoverRoutes(contract) {
   const routes = [];
   const backends = Object.fromEntries(legacyBackends(contract).map((b) => [b.name, b]));
@@ -623,6 +634,7 @@ function cutoverRoutes(contract) {
       let match = base;
       if (r.cohort) {
         if (!(cohort.clients || []).length) continue;
+        assertHeaderOnlyTokens(contract, c.name);
         const header = `@request.auth.claims.${cohort.claim || 'azp'}`;
         match = base.flatMap((m) => cohort.clients.map((id) => ({ ...structuredClone(m), headers: { [header]: { exact: id } } })));
       }
@@ -1052,6 +1064,16 @@ function externalSecretAdmission(contract) {
           messageExpression:
             "'every remote key must start with ' + variables.prefixes.join(' or ') + '; got ' + " +
             'variables.keys.filter(k, !variables.prefixes.exists(p, k.startsWith(p))).join(\', \')',
+          reason: 'Forbidden',
+        },
+        {
+          // <env>/<slug>/db-import is the operator import credential
+          // (terraform-modules operator-db-access); it never leaves Secrets
+          // Manager for a cluster, not even for its own service.
+          expression: "variables.keys.all(k, !k.endsWith('/db-import'))",
+          messageExpression:
+            "'remote keys ending in /db-import (operator import credential) are never synced into a cluster; got ' + " +
+            "variables.keys.filter(k, k.endsWith('/db-import')).join(', ')",
           reason: 'Forbidden',
         },
       ],

@@ -84,6 +84,11 @@ const cases = [
   admissionCase('shared-namespace', 'observability', { keys: [`${ENV}/observability/remote-write`, `${ENV}/observability-grafana/oidc-client`] }),
   admissionCase('shared-namespace-platform-key', 'observability', { keys: [`${ENV}/platform/internal-ca`] }),
   admissionCase('no-scope', 'sandbox', { label: 'anything', keys: [`${ENV}/anything/x`] }),
+  // Operator import credential (terraform-modules operator-db-access): never synced, not even by its own service.
+  admissionCase('db-import', 'payments', { label: BULK, keys: [`${ENV}/${BULK}/db-app`, `${ENV}/${BULK}/db-import`] }),
+  admissionCase('db-import-extract', 'payments', { label: BULK, dataFrom: [{ extract: { key: `${ENV}/${BULK}/db-import` } }] }),
+  admissionCase('db-import-shared', 'observability', { keys: [`${ENV}/observability/db-import`] }),
+  admissionCase('db-import-lookalike', 'payments', { label: BULK, keys: [`${ENV}/${BULK}/db-import-notes`, `${ENV}/${BULK}/old-db-import/x`] }),
 ];
 
 test('CEL: a service-namespace ExternalSecret for <env>/platform/internal-ca is rejected', { skip }, () => {
@@ -98,7 +103,7 @@ test('CEL: a service-namespace ExternalSecret for <env>/platform/internal-ca is 
 test('CEL: store, slug, label, find and sourceRef rules reject; own and shared scopes admit', { skip }, () => {
   const r = evaluate(policySpec(), cases);
   const allowed = Object.entries(r).filter(([, v]) => v.allowed).map(([k]) => k).sort();
-  assert.deepEqual(allowed, ['own-slug', 'shared-namespace']);
+  assert.deepEqual(allowed, ['db-import-lookalike', 'own-slug', 'shared-namespace']);
   const msg = (name) => r[name].messages.join(' | ');
   assert.match(msg('platform-store'), /secretStoreRef must be ClusterSecretStore aws-secrets-manager/);
   assert.match(msg('namespaced-store'), /secretStoreRef must be ClusterSecretStore aws-secrets-manager/);
@@ -118,4 +123,17 @@ test('CEL: the rejection comes from the key-prefix validation (the test can fail
   spec.validations = spec.validations.filter((v) => !v.expression.includes('variables.prefixes.exists'));
   const r = evaluate(spec, cases);
   assert.equal(r['platform-internal-ca'].allowed, true, 'without the prefix rule the platform key would be admitted');
+});
+
+test('CEL: remote keys ending in /db-import are rejected, even inside the own <env>/<slug>/ scope', { skip }, () => {
+  const r = evaluate(policySpec(), cases);
+  for (const [name, key] of [
+    ['db-import', `${ENV}/${BULK}/db-import`],
+    ['db-import-extract', `${ENV}/${BULK}/db-import`],
+    ['db-import-shared', `${ENV}/observability/db-import`],
+  ]) {
+    assert.equal(r[name].allowed, false, name);
+    assert.deepEqual(r[name].messages, [`remote keys ending in /db-import (operator import credential) are never synced into a cluster; got ${key}`], name);
+  }
+  assert.equal(r['db-import-lookalike'].allowed, true, r['db-import-lookalike'].messages.join('; '));
 });
