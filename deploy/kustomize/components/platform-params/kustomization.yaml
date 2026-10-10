@@ -1,0 +1,26 @@
+# Substitutes the platform parameters of ConfigMap mesh-params into the
+# k8s/platform resources (External Secrets stores and service account, the
+# internal CA ExternalSecret). Used by the mesh overlays (overlays/<env>) and
+# by the pre-Istio PKI overlays (platform-pki/<env>), so both render these
+# resources identically (scripts/ci/validate-manifests.sh checks it).
+# Needs only ENVIRONMENT, AWS_REGION and PLATFORM_SECRETS_ROLE_ARN.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+replacements:
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.AWS_REGION}
+    targets:
+      - select: {kind: ClusterSecretStore, name: aws-secrets-manager}
+        fieldPaths: [spec.provider.aws.region]
+      - select: {kind: ClusterSecretStore, name: aws-secrets-manager-platform}
+        fieldPaths: [spec.provider.aws.region]
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.ENVIRONMENT}
+    targets:
+      - select: {kind: ExternalSecret, name: fintechbankx-internal-ca-keypair}
+        fieldPaths: [spec.data.0.remoteRef.key, spec.data.1.remoteRef.key]
+        options: {delimiter: /, index: 0}
+  # IRSA role of the platform store's ESO service account (terraform-modules output).
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.PLATFORM_SECRETS_ROLE_ARN}
+    targets:
+      - select: {kind: ServiceAccount, name: external-secrets-platform}
+        fieldPaths: ["metadata.annotations.[eks.amazonaws.com/role-arn]"]

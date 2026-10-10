@@ -14,3 +14,4 @@ configMapGenerator:
 
 components:
   - ../../components/mesh-params
+  - ../../components/platform-params

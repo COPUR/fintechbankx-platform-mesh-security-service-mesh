@@ -1,0 +1,42 @@
+# jetstack/trust-manager (version in ../TRUST_MANAGER_VERSION) - platform
+# install values (Proposed). Installed by scripts/istio/install-mesh.sh after
+# cert-manager (its webhook certificate is a cert-manager Certificate) and
+# before the platform PKI kustomization that creates the Bundles.
+# v0.19.0 is the newest trust-manager whose e2e matrix covers Kubernetes 1.30
+# (1.30 to 1.33) and it serves trust.cert-manager.io/v1alpha1 Bundle, the API
+# of k8s/platform/cert-manager/bundle-*.yaml and the prod corporate-directory
+# Bundle.
+
+crds:
+  enabled: true
+  keep: true
+
+app:
+  trust:
+    # Bundle sources (ConfigMap amazon-rds-ca-source, Secret
+    # fintechbankx-internal-ca-keypair, corporate-directory-ca-source) live in
+    # cert-manager; tests/platform-pki-install.test.mjs keeps them aligned.
+    namespace: cert-manager
+
+# Every Bundle targets ConfigMaps only. Secret targets would grant
+# trust-manager read access to all Secrets in the cluster.
+secretTargets:
+  enabled: false
+
+# No Bundle uses useDefaultCAs, so the public CA package init container
+# (an extra image) is not needed.
+defaultPackage:
+  enabled: false
+
+# HA with leader election (chart default); targets keep being served by the
+# kube-apiserver while trust-manager is down, only updates pause.
+replicaCount: 2
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi
+  limits:
+    memory: 256Mi

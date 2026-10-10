@@ -56,11 +56,12 @@ selected per workload, not per namespace.
 | Istio install | `deploy/istio/ISTIO_VERSION` (1.24.3), `deploy/istio/helm/*.values.yaml`, `env/<env>/` | istiod HPA 3..6, zone spread, PDB; gateway HPA 3..12, PDB minAvailable 2, zone spread, AWS NLB (IP targets, cross-zone, health on 15021); `outboundTrafficPolicy: REGISTRY_ONLY`; OTel tracing provider; locality LB |
 | Namespaces | `generated/namespaces.yaml` | Labels `istio-injection`, `fintechbankx.io/context` |
 | mTLS | `generated/peer-authentication.yaml` | Mesh-wide `default` STRICT in `istio-system` plus per-namespace STRICT |
-| AuthN | `generated/request-authentication.yaml` | Gateway: issuer only. Each workload: issuer + `aud` = its service id |
+| AuthN | `generated/request-authentication.yaml` | Gateway: issuer only. Each workload: issuer + `aud` = its service id. All read tokens from `Authorization` (`Bearer `, `DPoP `) only, never a query parameter |
 | AuthZ | `generated/authorization-policies.yaml` | `default-deny` per injected namespace, ALLOW per caller principal per edge, `require-jwt-for-api` DENY, health on 8081 |
 | Traffic | `generated/destination-rules.yaml`, `generated/service-entries.yaml`, `generated/sidecars.yaml`, `generated/ingress-routing.yaml` | See resilience mapping |
 | NetworkPolicy | `generated/network-policies.yaml` | Default-deny, DNS, istiod 15012, node health 15020/15021, scraping, edge-derived ingress/egress, Aurora/MSK/VPC-endpoint CIDRs |
 | Secrets | `k8s/platform/external-secrets/`, `deploy/kustomize/base/ingress-tls-externalsecret.yaml`, `deploy/kustomize/base/generated/externalsecret-admission.yaml` | `aws-secrets-manager` (IRSA SA `external-secrets`; conditions: namespaces labelled `fintechbankx.io/namespace-kind=service` and `observability`); `aws-secrets-manager-platform` (IRSA SA `external-secrets-platform`; conditions: `cert-manager`, `istio-ingress`, `identity`) for the internal CA, ingress TLS (`<env>/platform/ingress-tls`), corporate directory CA and Keycloak material; ValidatingAdmissionPolicy `fintechbankx-externalsecret-scope` + Deny binding: outside the platform-store namespaces an ExternalSecret must use `aws-secrets-manager` and read only `<env>/<slug>/` keys, where in a service namespace `<slug>` is its `app.kubernetes.io/name` label and one of that namespace's service accounts (payments holds four), and no remote key may end in `/db-import` (the operator import credential of terraform-modules `operator-db-access` is never synced into a cluster). Validator rule R10 checks the structure; the CEL runs only in a kube-apiserver |
+| PKI install | `deploy/cert-manager/` (versions, Helm values), `deploy/kustomize/platform-pki/<env>/`, `components/platform-params` | cert-manager and trust-manager installed by this repo before Istio; see "Platform PKI install" |
 | Internal TLS | `k8s/platform/cert-manager/` | ClusterIssuer `fintechbankx-internal-ca` (CA issuer; key pair synced by ExternalSecret from `<env>/platform/internal-ca` into ns `cert-manager`, no material in git); trust-manager Bundle `fintechbankx-internal-ca` -> ConfigMap `fintechbankx-internal-ca` (key `ca.crt`) in every namespace labelled `fintechbankx.io/namespace-kind` |
 | Corporate directory (prod only) | `deploy/kustomize/components/corporate-directory/` | Bundle `corporate-directory-ca` -> ConfigMap in `identity` (source: ExternalSecret from `<env>/platform/corporate-directory-ca`); ServiceEntry + NetworkPolicy for Keycloak -> `DIRECTORY_HOST:636` (LDAPS) |
 | Params | `deploy/kustomize/overlays/<env>/params.env`, `components/mesh-params` | Identity/API host, region, VPC/Aurora/MSK/DocumentDB/Redis CIDRs, environment |
@@ -165,15 +166,68 @@ handshake and failure counters for `MeshMtlsHandshakeFailures`.
 
 There is no PeerAuthentication exception: no PERMISSIVE or DISABLE anywhere.
 
+## Platform PKI install (Proposed)
+
+The platform mesh repository installs cert-manager and trust-manager; service
+charts assume ConfigMap `rds-ca-bundle` and ClusterIssuer
+`fintechbankx-internal-ca` already exist and never install either component.
+`scripts/istio/install-mesh.sh <env> [--apply]` runs, waiting after each step:
+
+| Step | What | Readiness wait |
+|---|---|---|
+| 0 | Preflight: External Secrets Operator CRDs present (ESO is installed outside this repo) | `kubectl get crd` |
+| 1 | `jetstack/cert-manager` `v1.18.6`, ns `cert-manager`, values `deploy/cert-manager/helm/cert-manager.values.yaml` | `helm --wait` (incl. startupapicheck), CRDs Established, three Deployments Available |
+| 2 | `jetstack/trust-manager` `v0.19.0`, ns `cert-manager`, values `deploy/cert-manager/helm/trust-manager.values.yaml` | `helm --wait`, CRD `bundles.trust.cert-manager.io` Established, Deployment Available |
+| 3 | `kubectl apply --server-side -k deploy/kustomize/platform-pki/<env>` | ClusterSecretStore and ExternalSecret Ready, ClusterIssuer Ready, both Bundles Synced |
+| 4 | Istio base, istiod, mesh overlay, ingress gateway | `helm --wait` |
+| 5 | ConfigMap `rds-ca-bundle` present in every namespace labelled `fintechbankx.io/namespace-kind` `service` or `platform` | polls up to 5 minutes |
+
+Values (both charts): CRDs in the release with `crds.keep: true`. cert-manager:
+2 replicas and a PDB for controller, webhook and cainjector, leader-election
+lease in `cert-manager`, ServiceMonitor off (owned by the observability repo).
+trust-manager: trust namespace `cert-manager` (where `amazon-rds-ca-source`,
+`fintechbankx-internal-ca-keypair` and `corporate-directory-ca-source` live),
+`secretTargets.enabled: false` (every Bundle targets ConfigMaps),
+`defaultPackage.enabled: false` (no Bundle uses `useDefaultCAs`), 2 replicas
+and a PDB.
+
+Why these versions: cert-manager 1.18 is the newest line whose e2e matrix
+covers Kubernetes 1.30 (1.29 to 1.33; 1.19 starts at 1.31), and trust-manager
+v0.19.0 is the newest release whose matrix covers 1.30 (v0.20 starts at 1.31).
+Both serve the APIs used here (`cert-manager.io/v1` ClusterIssuer,
+`trust.cert-manager.io/v1alpha1` Bundle). cert-manager 1.18 is past its
+upstream support window: move both to supported lines when the clusters leave
+Kubernetes 1.30.
+
+The platform PKI resources render twice: in `platform-pki/<env>` (step 3) and
+in the mesh overlay (step 4). `components/platform-params` substitutes them in
+both, `platform-pki/<env>/params.env` repeats three keys of the overlay
+`params.env` (checked by `tests/platform-pki-install.test.mjs`), and
+`scripts/ci/validate-manifests.sh` checks that every PKI document is identical
+in the mesh render, so the second server-side apply changes nothing.
+
+The legacy `scripts/istio/deploy-security-policies.sh` no longer applies
+cert-manager from a remote release URL; it points to `install-mesh.sh`.
+
+Not verified: no cluster install has been run. `validate-manifests.sh` pulls
+both charts from `charts.jetstack.io` and validates them with `helm template`
+(values schema) and kubeconform. When this was written, that step had only
+run against charts assembled from the tagged sources (the chart repository
+was not reachable from the authoring environment); the first CI run is the
+first validation of the published archives. Chart archive digests are not
+pinned yet.
+
 ## Validation
 
 ```bash
 npm ci
 npm test                               # 21 node:test cases (validator + contract)
 npm run validate:strict-mtls           # R1..R8 on the repo sources
-bash scripts/ci/validate-manifests.sh  # kustomize build x3, kubeconform (Istio/ESO CRD
-                                       # schemas from datreeio CRDs-catalog), validator on
-                                       # rendered output, istioctl analyze, helm template
+bash scripts/ci/validate-manifests.sh  # kustomize build x3 (+ platform-pki x3), kubeconform
+                                       # (Istio/ESO/cert-manager CRD schemas from datreeio
+                                       # CRDs-catalog), validator on rendered output,
+                                       # istioctl analyze, helm template of the Istio,
+                                       # cert-manager and trust-manager charts
 ```
 
 `istioctl analyze --use-kube=false` checks the policies in isolation; it cannot
@@ -224,9 +278,9 @@ like every public route:
   client id and re-rendering.
 - R3 reads `azp` from the token the gateway validated. TPP tokens use `Authorization: DPoP`, so the gateway
   RequestAuthentication extracts `Bearer ` and `DPoP ` from `Authorization` only. The `access_token` query parameter
-  (an Istio default location) is not read: a token in the URL must never select the cohort, and the renderer refuses a
-  non-empty cohort while `gateway.tokenLocations` has `fromParams`, `fromCookies` or no explicit header (Istio would
-  fall back to its defaults). The gateway still checks the issuer only. JWT claim routing is supported on gateways
+  (an Istio default location) is not read: a token in the URL must never select the cohort. Every workload
+  RequestAuthentication uses the same header-only list, and the renderer refuses any `gateway.tokenLocations` with
+  `fromParams`, `fromCookies` or no explicit header (Istio would fall back to its defaults). The gateway still checks the issuer only. JWT claim routing is supported on gateways
   only (Istio 1.24). Not verified on a cluster: how the gateway treats a DPoP token from another issuer (Envoy
   `allow_missing` is expected to treat an unknown issuer like a missing token, as it already does for Bearer); drill
   before step 3.

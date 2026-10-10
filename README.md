@@ -65,12 +65,14 @@ schema, policy checks), never applied to a cluster.
 | [deploy/istio](deploy/istio) | Istio 1.24.3 Helm values (base, istiod HA, ingress gateway behind AWS NLB), per-env overrides |
 | [deploy/kustomize](deploy/kustomize) | Base (generated policies) + overlays `dev`, `staging`, `prod` with `params.env` |
 | [k8s/platform/external-secrets](k8s/platform/external-secrets) | ClusterSecretStores `aws-secrets-manager` (service namespaces and `observability`, ESO SA `external-secrets`) and `aws-secrets-manager-platform` (`cert-manager`, `istio-ingress`, `identity` only, ESO SA `external-secrets-platform`), each with its own IRSA role |
-| [k8s/platform/cert-manager](k8s/platform/cert-manager) | ClusterIssuer and trust-manager Bundle `fintechbankx-internal-ca` (key pair from Secrets Manager `<env>/platform/internal-ca`) |
+| [k8s/platform/cert-manager](k8s/platform/cert-manager) | ClusterIssuer and trust-manager Bundle `fintechbankx-internal-ca` (key pair from Secrets Manager `<env>/platform/internal-ca`); Bundle `rds-ca-bundle` (Amazon RDS / DocumentDB CA) |
+| [deploy/cert-manager](deploy/cert-manager) | Pinned jetstack chart versions (`CERT_MANAGER_VERSION`, `TRUST_MANAGER_VERSION`) and the committed Helm values for cert-manager and trust-manager |
+| [deploy/kustomize/platform-pki](deploy/kustomize/platform-pki) | Per-env platform PKI (issuer, bundles, their sources and stores) applied before Istio; renders identically inside the mesh overlay |
 | [deploy/kustomize/components/corporate-directory](deploy/kustomize/components/corporate-directory) | prod only: Bundle `corporate-directory-ca` and Keycloak LDAPS egress |
 | [scripts/generate](scripts/generate) | Renders `deploy/kustomize/base/generated/*.yaml` from the contract |
 | [scripts/validation](scripts/validation) | `npm run validate:strict-mtls` (rules R1-R12) |
 | [scripts/ci/validate-manifests.sh](scripts/ci/validate-manifests.sh) | kustomize build, kubeconform with Istio/ESO CRD schemas, istioctl analyze, helm template |
-| [scripts/istio/install-mesh.sh](scripts/istio/install-mesh.sh) | Install order (prints a plan unless `--apply`) |
+| [scripts/istio/install-mesh.sh](scripts/istio/install-mesh.sh) | Install order: cert-manager, trust-manager, platform PKI, Istio, mesh policies, gateway (prints a plan unless `--apply`) |
 | [docs/mesh/DEPLOYABLE_MESH_BASELINE.md](docs/mesh/DEPLOYABLE_MESH_BASELINE.md) | Call graph, gaps, resilience mapping, exceptions, drift fixed |
 
 What it enforces: mesh-wide STRICT mTLS (`PeerAuthentication default` in
@@ -82,6 +84,23 @@ workload), a JWT required on `/api/**`, `outboundTrafficPolicy: REGISTRY_ONLY`
 with ServiceEntries for Aurora, MSK, AWS APIs and the identity host,
 DestinationRules with connection pools, outlier detection and locality-aware
 load balancing.
+
+### Platform PKI: who installs cert-manager and trust-manager
+
+This repository does. `scripts/istio/install-mesh.sh` installs, in order and
+waiting for each step: cert-manager (jetstack chart, version in
+[deploy/cert-manager/CERT_MANAGER_VERSION](deploy/cert-manager/CERT_MANAGER_VERSION)),
+trust-manager (version in
+[deploy/cert-manager/TRUST_MANAGER_VERSION](deploy/cert-manager/TRUST_MANAGER_VERSION),
+trust namespace `cert-manager`, ConfigMap targets only), then the platform PKI
+(ClusterIssuer `fintechbankx-internal-ca`, Bundles `rds-ca-bundle` and
+`fintechbankx-internal-ca`), then Istio and the mesh policies. Both charts
+install their CRDs. The External Secrets Operator (CRDs and controller) must
+already be installed. Details: [docs/mesh/DEPLOYABLE_MESH_BASELINE.md](docs/mesh/DEPLOYABLE_MESH_BASELINE.md).
+
+Service charts must not install cert-manager, trust-manager or their CRDs.
+They assume ConfigMap `rds-ca-bundle` (key `global-bundle.pem`) already exists
+in their namespace and that ClusterIssuer `fintechbankx-internal-ca` exists.
 
 ### How a service consumes the mesh
 
@@ -119,7 +138,11 @@ A service chart must (platform contract addendum, 2026-10-08):
   `<env>/identity-keycloak/*`, `<env>/identity-openldap/*`) are only reachable through
   `aws-secrets-manager-platform` from the platform namespaces;
 - validate JWT issuer `https://<identity-host>/realms/fintechbankx` and an
-  `aud` containing its own service id.
+  `aud` containing its own service id; send tokens in the `Authorization`
+  header (`Bearer ` or `DPoP `). The workload RequestAuthentication reads no
+  query parameter or cookie;
+- mount ConfigMap `rds-ca-bundle` (installed by the platform, see above) to
+  verify Aurora PostgreSQL and DocumentDB TLS instead of shipping its own copy.
 
 A new call edge is added to `contracts/mesh-contract.yaml` (with evidence),
 then `npm run generate`; the validator rejects principals that are not in the
@@ -130,6 +153,8 @@ contract.
 ```bash
 npm ci && npm test && npm run validate:strict-mtls
 bash scripts/ci/validate-manifests.sh   # needs kustomize, kubeconform, helm, istioctl
+# Without access to charts.jetstack.io: JETSTACK_CHARTS=skip (the
+# cert-manager / trust-manager charts are then NOT validated; CI never skips).
 ```
 
 Legacy material from the monolith extraction (`k8s/istio/security`,

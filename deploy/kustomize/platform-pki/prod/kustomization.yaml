@@ -1,0 +1,30 @@
+# Platform PKI for prod (Proposed), applied by scripts/istio/install-mesh.sh
+# after cert-manager and trust-manager and before Istio: the internal CA
+# ClusterIssuer, trust-manager Bundles rds-ca-bundle and
+# fintechbankx-internal-ca with their sources, and the External Secrets
+# stores they need. The mesh overlay overlays/prod renders the same resources
+# again (identical, checked by scripts/ci/validate-manifests.sh), so the later
+# server-side apply of the mesh is a no-op for them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: fintechbankx-platform-mesh
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: false
+
+resources:
+  - ../../../../k8s/platform/external-secrets
+  - ../../../../k8s/platform/cert-manager
+
+configMapGenerator:
+  - name: mesh-params
+    envs: [params.env]
+    options:
+      disableNameSuffixHash: true
+      annotations:
+        config.kubernetes.io/local-config: "true"
+
+components:
+  - ../../components/platform-params
