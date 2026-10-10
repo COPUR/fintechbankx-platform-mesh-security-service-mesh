@@ -70,44 +70,71 @@ const CRC = [
   api: { 'app.kubernetes.io/name': j.owner, 'app.kubernetes.io/instance': j.owner, 'app.kubernetes.io/component': 'service', ...j.podLabels },
 }));
 
-// Namespace default ServiceAccount (no serviceAccountName, no token): pod
-// labels exactly as rendered (templates/migration-job.yaml pod template),
-// next to the service's Deployment pod labels from the same render.
+// Namespace default ServiceAccount (no serviceAccountName, no token): the Job
+// pod labels exactly as rendered (templates/migration-job.yaml pod template),
+// next to the service's Deployment pod labels from the same render, each chart
+// with its CI args and image.tag "ci". `version` is the image tag: the loan
+// and payments workflows pass the commit sha there, consent's chart checks
+// default to "ci"; no mesh policy selects on it or on fintechbankx.io/app.
 const DEFAULT_SA = [
   {
     ns: 'lending',
     owner: 'loan-lifecycle-service',
     name: 'loan-lifecycle-service-db-migration', // loan 629444d migration-job.yaml:55-74
     pod: { 'fintechbankx.io/squad': 'lending' },
-    api: { 'fintechbankx.io/squad': 'lending', 'app.kubernetes.io/part-of': 'fintechbankx-lending', 'fintechbankx.io/service-id': 'svc-ln-loan-lifecycle' },
+    api: {
+      'fintechbankx.io/squad': 'lending',
+      'app.kubernetes.io/part-of': 'fintechbankx-lending',
+      'fintechbankx.io/app': 'app-ln-loan-lifecycle',
+      'fintechbankx.io/service-id': 'svc-ln-loan-lifecycle',
+    },
   },
   {
     ns: 'payments',
     owner: 'payment-initiation-settlement-service',
     name: 'payment-initiation-settlement-service-db-migration', // initiation 9671414 migration-job.yaml:54-73
     pod: { 'fintechbankx.io/squad': 'payments' },
-    api: { 'fintechbankx.io/squad': 'payments', 'app.kubernetes.io/part-of': 'fintechbankx-payments', 'fintechbankx.io/service-id': 'svc-pay-initiation-settlement' },
+    api: {
+      'fintechbankx.io/squad': 'payments',
+      'app.kubernetes.io/part-of': 'fintechbankx-payments',
+      'fintechbankx.io/app': 'app-pay-initiation-settlement',
+      'fintechbankx.io/service-id': 'svc-pay-initiation-settlement',
+    },
   },
   {
     ns: 'payments',
     owner: 'payment-recurring-mandates-service',
     name: 'payment-recurring-mandates-service-db-migration', // mandates ceb45b5 migration-job.yaml:58-77
     pod: {},
-    api: { 'app.kubernetes.io/part-of': 'fintechbankx-payments', 'fintechbankx.io/service-id': 'svc-pay-recurring-mandates' },
+    api: {
+      'app.kubernetes.io/part-of': 'fintechbankx-payments',
+      'fintechbankx.io/app': 'app-pay-recurring-mandates',
+      'fintechbankx.io/service-id': 'svc-pay-recurring-mandates',
+    },
   },
   {
     ns: 'payments',
     owner: 'payment-bulk-orchestration-service',
     name: 'payment-bulk-orchestration-service-db-migration', // bulk fe1d583 migration-job.yaml:55-79
     pod: { 'fintechbankx.io/squad': 'payments' },
-    api: { 'fintechbankx.io/squad': 'payments', 'app.kubernetes.io/part-of': 'fintechbankx-payments', 'fintechbankx.io/service-id': 'svc-pay-bulk-orchestration' },
+    api: {
+      'fintechbankx.io/squad': 'payments',
+      'app.kubernetes.io/part-of': 'fintechbankx-payments',
+      'fintechbankx.io/app': 'app-pay-bulk-orchestration',
+      'fintechbankx.io/service-id': 'svc-pay-bulk-orchestration',
+    },
   },
   {
     ns: 'payments',
     owner: 'payment-request-to-pay-service',
     name: 'payment-request-to-pay-service-db-migration', // rtp 2cd8e3c migration-job.yaml:57-77
     pod: { 'fintechbankx.io/squad': 'payments' },
-    api: { 'fintechbankx.io/squad': 'payments', 'app.kubernetes.io/part-of': 'fintechbankx-payments', 'fintechbankx.io/service-id': 'svc-pay-request-to-pay' },
+    api: {
+      'fintechbankx.io/squad': 'payments',
+      'app.kubernetes.io/part-of': 'fintechbankx-payments',
+      'fintechbankx.io/app': 'app-pay-request-to-pay',
+      'fintechbankx.io/service-id': 'svc-pay-request-to-pay',
+    },
   },
   {
     ns: 'open-finance',
