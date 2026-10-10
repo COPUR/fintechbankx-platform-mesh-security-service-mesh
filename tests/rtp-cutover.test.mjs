@@ -189,10 +189,12 @@ test('a cohort rule refuses gateway token locations that read the URL or fall ba
     const c = withCohort(['tpp-pilot']);
     c.gateway.tokenLocations = locations;
     assert.throws(() => render(c), /tokenLocations/, JSON.stringify(locations));
-    // An empty cohort renders no R3, so nothing routes on claims yet.
+    // Even with an empty cohort (no R3) the locations are refused: every
+    // RequestAuthentication, gateway and workloads, is header-only
+    // (tests/request-authentication-token-locations.test.mjs).
     const empty = structuredClone(contract);
     empty.gateway.tokenLocations = locations;
-    assert.doesNotThrow(() => render(empty));
+    assert.throws(() => render(empty), /tokenLocations/, JSON.stringify(locations));
   }
 });
 

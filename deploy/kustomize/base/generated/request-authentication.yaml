@@ -34,6 +34,11 @@ spec:
       jwksUri: https://IDENTITY_HOST/realms/fintechbankx/protocol/openid-connect/certs
       audiences:
         - svc-ln-loan-lifecycle
+      fromHeaders:
+        - name: Authorization
+          prefix: "Bearer "
+        - name: Authorization
+          prefix: "DPoP "
       forwardOriginalToken: true
 ---
 apiVersion: security.istio.io/v1
@@ -50,6 +55,11 @@ spec:
       jwksUri: https://IDENTITY_HOST/realms/fintechbankx/protocol/openid-connect/certs
       audiences:
         - svc-pay-initiation-settlement
+      fromHeaders:
+        - name: Authorization
+          prefix: "Bearer "
+        - name: Authorization
+          prefix: "DPoP "
       forwardOriginalToken: true
 ---
 apiVersion: security.istio.io/v1
@@ -66,6 +76,11 @@ spec:
       jwksUri: https://IDENTITY_HOST/realms/fintechbankx/protocol/openid-connect/certs
       audiences:
         - svc-pay-request-to-pay
+      fromHeaders:
+        - name: Authorization
+          prefix: "Bearer "
+        - name: Authorization
+          prefix: "DPoP "
       forwardOriginalToken: true
 ---
 apiVersion: security.istio.io/v1
@@ -82,6 +97,11 @@ spec:
       jwksUri: https://IDENTITY_HOST/realms/fintechbankx/protocol/openid-connect/certs
       audiences:
         - svc-pay-recurring-mandates
+      fromHeaders:
+        - name: Authorization
+          prefix: "Bearer "
+        - name: Authorization
+          prefix: "DPoP "
       forwardOriginalToken: true
 ---
 apiVersion: security.istio.io/v1
@@ -98,6 +118,11 @@ spec:
       jwksUri: https://IDENTITY_HOST/realms/fintechbankx/protocol/openid-connect/certs
       audiences:
         - svc-pay-bulk-orchestration
+      fromHeaders:
+        - name: Authorization
+          prefix: "Bearer "
+        - name: Authorization
+          prefix: "DPoP "
       forwardOriginalToken: true
 ---
 apiVersion: security.istio.io/v1
@@ -114,6 +139,11 @@ spec:
       jwksUri: https://IDENTITY_HOST/realms/fintechbankx/protocol/openid-connect/certs
       audiences:
         - svc-cus-profile-kyc
+      fromHeaders:
+        - name: Authorization
+          prefix: "Bearer "
+        - name: Authorization
+          prefix: "DPoP "
       forwardOriginalToken: true
 ---
 apiVersion: security.istio.io/v1
@@ -130,6 +160,11 @@ spec:
       jwksUri: https://IDENTITY_HOST/realms/fintechbankx/protocol/openid-connect/certs
       audiences:
         - svc-rsk-decisioning
+      fromHeaders:
+        - name: Authorization
+          prefix: "Bearer "
+        - name: Authorization
+          prefix: "DPoP "
       forwardOriginalToken: true
 ---
 apiVersion: security.istio.io/v1
@@ -146,4 +181,9 @@ spec:
       jwksUri: https://IDENTITY_HOST/realms/fintechbankx/protocol/openid-connect/certs
       audiences:
         - svc-cmp-evidence
+      fromHeaders:
+        - name: Authorization
+          prefix: "Bearer "
+        - name: Authorization
+          prefix: "DPoP "
       forwardOriginalToken: true

@@ -65,8 +65,10 @@ gateway:
   # into logs and caches and must never select a cohort route; nothing in
   # this repo needs one. The list must stay explicit: with no location
   # Istio falls back to its defaults, query access_token included (the
-  # renderer refuses both while a cohort is non-empty). The gateway still
-  # checks the issuer only; the DPoP proof is checked by the service.
+  # renderer refuses both). Every workload RequestAuthentication uses the
+  # same header-only list (review 5478494656): workloads receive the token
+  # the gateway forwarded or a caller's Authorization header. The gateway
+  # still checks the issuer only; the DPoP proof is checked by the service.
   tokenLocations:
     fromHeaders:
       - {name: Authorization, prefix: "Bearer "}

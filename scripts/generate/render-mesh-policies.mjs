@@ -88,13 +88,27 @@ function jwtRule(contract, audiences, locations) {
 // requires its own service id in `aud` (platform contract addendum). There is
 // deliberately no namespace-wide rule without audiences, because Istio accepts
 // a token that matches ANY applicable rule.
+// Token locations are explicit and header-only for the gateway and every
+// workload: with none Istio falls back to its defaults, which include the
+// query parameter access_token (tokens in URLs leak into logs and caches).
+// Workloads receive the token the gateway forwarded (forwardOriginalToken) or
+// a service's own Authorization header, so they use the same list.
+function headerTokenLocations(contract) {
+  const l = contract.gateway.tokenLocations || {};
+  if (!(l.fromHeaders || []).length || (l.fromParams || []).length || (l.fromCookies || []).length) {
+    throw new Error('gateway.tokenLocations must list fromHeaders only (no fromParams, no fromCookies, no Istio defaults)');
+  }
+  return { fromHeaders: l.fromHeaders };
+}
+
 function requestAuthentications(contract) {
+  const locations = headerTokenLocations(contract);
   const docs = [
     {
       apiVersion: SEC,
       kind: 'RequestAuthentication',
       metadata: { name: 'keycloak-jwt', namespace: contract.gateway.namespace },
-      spec: { selector: { matchLabels: contract.gateway.selector }, jwtRules: [jwtRule(contract, null, contract.gateway.tokenLocations)] },
+      spec: { selector: { matchLabels: contract.gateway.selector }, jwtRules: [jwtRule(contract, null, locations)] },
     },
   ];
   for (const n of serviceNamespaces(contract)) {
@@ -106,7 +120,7 @@ function requestAuthentications(contract) {
         metadata: { name: `keycloak-jwt-${w.serviceAccount}`, namespace: n.name },
         spec: {
           selector: { matchLabels: nameLabel(w.serviceAccount) },
-          jwtRules: [jwtRule(contract, [w.serviceId])],
+          jwtRules: [jwtRule(contract, [w.serviceId], locations)],
         },
       });
     }
