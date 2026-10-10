@@ -31,8 +31,9 @@ test('the gateway pins numTrustedProxies 0', () => {
   }
 });
 
-// With native sidecars a Job completes inside the mesh (db-migration Jobs,
-// keycloak-realm-import), so "a sidecar keeps a Job from completing" is never
+// With native sidecars a Job completes inside the mesh (keycloak-realm-import
+// does; the db-migration Jobs in the contract run sidecar-less by the owner's
+// choice, not by need), so "a sidecar keeps a Job from completing" is never
 // a valid reason to run a workload without one. A sidecar-less workload's
 // exception must say why it is actually needed, or that it is the owner's
 // choice pending review.
