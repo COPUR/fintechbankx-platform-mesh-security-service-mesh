@@ -626,9 +626,12 @@ test('contract: cross-namespace egress is per calling workload, not per namespac
   }
   const callees = (d) => d.spec.egress.map((r) => [r.to.map((t) => t.podSelector.matchLabels['app.kubernetes.io/name']).join(','), r.ports.map((p) => p.port).join(',')]);
   const sel = (name) => ({ 'app.kubernetes.io/name': name });
+  // The service's sidecar-less migration Job pods (same name, component
+  // db-migration) are excluded (tests/sidecarless-migration-job-egress.test.mjs).
+  const notJob = [{ key: 'app.kubernetes.io/component', operator: 'NotIn', values: ['db-migration'] }];
 
   const bulk = np('payments', 'allow-egress-payment-bulk-orchestration-service-to-open-finance');
-  assert.deepEqual(bulk.spec.podSelector, { matchLabels: sel('payment-bulk-orchestration-service') });
+  assert.deepEqual(bulk.spec.podSelector, { matchLabels: sel('payment-bulk-orchestration-service'), matchExpressions: notJob });
   assert.deepEqual(callees(bulk), [['consent-authorization-service', '8080']]);
   const mandates = np('payments', 'allow-egress-payment-recurring-mandates-service-to-open-finance');
   assert.deepEqual(callees(mandates), [['consent-authorization-service', '8080']]);
@@ -642,7 +645,7 @@ test('contract: cross-namespace egress is per calling workload, not per namespac
     assert.equal(np('payments', `allow-egress-payment-request-to-pay-service-to-${t}`), undefined, t);
   }
   const loan = np('lending', 'allow-egress-loan-lifecycle-service-to-customer');
-  assert.deepEqual(loan.spec.podSelector, { matchLabels: sel('loan-lifecycle-service') });
+  assert.deepEqual(loan.spec.podSelector, { matchLabels: sel('loan-lifecycle-service'), matchExpressions: notJob });
   assert.deepEqual(callees(loan), [['customer-profile-kyc-service', '8080']]);
   // The callee side still admits only the calling workloads.
   const ingress = np('open-finance', 'allow-ingress-from-payments');

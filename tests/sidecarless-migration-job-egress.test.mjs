@@ -1,13 +1,22 @@
-// Sidecar-less Flyway migration Jobs of customer, risk and compliance (CRC
-// branch claude/customer-risk-compliance-deployable-ygi0zo, each chart's
-// templates/migration-job.yaml and _helpers.tpl). The Job pods run WITHOUT an
-// Istio sidecar (sidecar.istio.io/inject "false" written after podLabels),
-// as their own ServiceAccount <service>-db-migration (no token), and carry
-// app.kubernetes.io/name=<service>, instance=<release> and
-// component=db-migration plus the chart's podLabels.
-//  - each Job pod reaches DNS and its service's Aurora (5432) and nothing else:
+// Sidecar-less Flyway migration Jobs (Helm pre-install/pre-upgrade hooks).
+// Every service chart that renders a migration Job renders it WITHOUT an Istio
+// sidecar (sidecar.istio.io/inject "false") with app.kubernetes.io/name=
+// <service>, instance=<release> and component=db-migration:
+//  - customer, risk and compliance (CRC branch
+//    claude/customer-risk-compliance-deployable-ygi0zo, each chart's
+//    templates/migration-job.yaml and _helpers.tpl) as their own
+//    ServiceAccount <service>-db-migration (no token);
+//  - loan-lifecycle (629444d), payment initiation/settlement (9671414),
+//    recurring mandates (ceb45b5), bulk orchestration (fe1d583), request to
+//    pay (2cd8e3c) and consent authorization (e4f56b1) as the namespace
+//    default ServiceAccount (the pod spec names none) with
+//    automountServiceAccountToken false. The pod labels below are the ones
+//    each chart renders with its own CI args (deployability.yml, release
+//    "ci"), plus the Job controller's labels.
+// For each Job:
+//  - its pod reaches DNS and its service's Aurora (5432) and nothing else:
 //    no MSK, istiod, VPC endpoints, east-west or ingress;
-//  - each is a documented R9 exception scoped to name + component;
+//  - it is a documented R9 exception scoped to name + component;
 //  - no other pod in those namespaces gains anything, and a pod with the same
 //    labels in another namespace gets nothing an unlabelled pod there does not.
 import { test } from 'node:test';
@@ -15,7 +24,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import YAML from 'yaml';
-import { repoRoot, loadContract, expandEdges, serviceWorkloads, secretScopes, principal } from '../scripts/lib/contract.mjs';
+import { repoRoot, loadContract, expandEdges, serviceWorkloads, secretScopes, principal, knownServiceAccounts } from '../scripts/lib/contract.mjs';
 import { render } from '../scripts/generate/render-mesh-policies.mjs';
 import { checkZeroTrust, loadRepoDocs } from '../scripts/validation/validate-strict-mtls.mjs';
 
@@ -23,9 +32,11 @@ const contract = loadContract();
 const generatedText = (file) => readFileSync(join(repoRoot, 'deploy/kustomize/base/generated', file), 'utf8');
 const netpols = YAML.parseAllDocuments(generatedText('network-policies.yaml')).map((d) => d.toJSON()).filter(Boolean);
 
-// Pod template labels: <x>.migrationSelectorLabels + podLabels (without the
-// inject key) + sidecar.istio.io/inject "false", plus the Job controller's labels.
-const JOBS = [
+const jobPod = (job, labels) => ({ ...labels, 'batch.kubernetes.io/job-name': job, 'job-name': job });
+
+// CRC: pod template labels = <x>.migrationSelectorLabels + podLabels (without
+// the inject key) + sidecar.istio.io/inject "false"; own ServiceAccount.
+const CRC = [
   {
     ns: 'risk',
     owner: 'risk-decisioning-service',
@@ -47,24 +58,88 @@ const JOBS = [
   },
 ].map((j) => ({
   ...j,
+  name: `${j.owner}-db-migration`,
   sa: `${j.owner}-db-migration`,
-  pod: {
+  pod: jobPod(`${j.owner}-db-migration`, {
     'app.kubernetes.io/name': j.owner,
     'app.kubernetes.io/instance': j.owner,
     'app.kubernetes.io/component': 'db-migration',
     ...j.podLabels,
     'sidecar.istio.io/inject': 'false',
-    'batch.kubernetes.io/job-name': `${j.owner}-db-migration`,
-    'job-name': `${j.owner}-db-migration`,
+  }),
+  api: { 'app.kubernetes.io/name': j.owner, 'app.kubernetes.io/instance': j.owner, 'app.kubernetes.io/component': 'service', ...j.podLabels },
+}));
+
+// Namespace default ServiceAccount (no serviceAccountName, no token): pod
+// labels exactly as rendered (templates/migration-job.yaml pod template),
+// next to the service's Deployment pod labels from the same render.
+const DEFAULT_SA = [
+  {
+    ns: 'lending',
+    owner: 'loan-lifecycle-service',
+    name: 'loan-lifecycle-service-db-migration', // loan 629444d migration-job.yaml:55-74
+    pod: { 'fintechbankx.io/squad': 'lending' },
+    api: { 'fintechbankx.io/squad': 'lending', 'app.kubernetes.io/part-of': 'fintechbankx-lending', 'fintechbankx.io/service-id': 'svc-ln-loan-lifecycle' },
+  },
+  {
+    ns: 'payments',
+    owner: 'payment-initiation-settlement-service',
+    name: 'payment-initiation-settlement-service-db-migration', // initiation 9671414 migration-job.yaml:54-73
+    pod: { 'fintechbankx.io/squad': 'payments' },
+    api: { 'fintechbankx.io/squad': 'payments', 'app.kubernetes.io/part-of': 'fintechbankx-payments', 'fintechbankx.io/service-id': 'svc-pay-initiation-settlement' },
+  },
+  {
+    ns: 'payments',
+    owner: 'payment-recurring-mandates-service',
+    name: 'payment-recurring-mandates-service-db-migration', // mandates ceb45b5 migration-job.yaml:58-77
+    pod: {},
+    api: { 'app.kubernetes.io/part-of': 'fintechbankx-payments', 'fintechbankx.io/service-id': 'svc-pay-recurring-mandates' },
+  },
+  {
+    ns: 'payments',
+    owner: 'payment-bulk-orchestration-service',
+    name: 'payment-bulk-orchestration-service-db-migration', // bulk fe1d583 migration-job.yaml:55-79
+    pod: { 'fintechbankx.io/squad': 'payments' },
+    api: { 'fintechbankx.io/squad': 'payments', 'app.kubernetes.io/part-of': 'fintechbankx-payments', 'fintechbankx.io/service-id': 'svc-pay-bulk-orchestration' },
+  },
+  {
+    ns: 'payments',
+    owner: 'payment-request-to-pay-service',
+    name: 'payment-request-to-pay-service-db-migration', // rtp 2cd8e3c migration-job.yaml:57-77
+    pod: { 'fintechbankx.io/squad': 'payments' },
+    api: { 'fintechbankx.io/squad': 'payments', 'app.kubernetes.io/part-of': 'fintechbankx-payments', 'fintechbankx.io/service-id': 'svc-pay-request-to-pay' },
+  },
+  {
+    ns: 'open-finance',
+    owner: 'consent-authorization-service',
+    name: 'consent-authorization-service-migrate', // consent e4f56b1 migration-job.yaml:52-61
+    pod: { 'fintechbankx.io/service-id': 'svc-of-consent-authorization' },
+    api: { 'app.kubernetes.io/part-of': 'fintechbankx-open-finance', 'fintechbankx.io/service-id': 'svc-of-consent-authorization' },
+  },
+].map((j) => ({
+  ...j,
+  sa: 'default',
+  pod: jobPod(j.name, {
+    'app.kubernetes.io/name': j.owner,
+    'app.kubernetes.io/instance': 'ci',
+    'app.kubernetes.io/component': 'db-migration',
+    ...j.pod,
+    'sidecar.istio.io/inject': 'false',
+  }),
+  api: {
+    'app.kubernetes.io/name': j.owner,
+    'app.kubernetes.io/instance': 'ci',
+    'app.kubernetes.io/component': 'service',
+    app: j.owner,
+    version: 'ci',
+    ...j.api,
+    'sidecar.istio.io/inject': 'true',
   },
 }));
+
+const JOBS = [...CRC, ...DEFAULT_SA];
 const JOB_NS = new Set(JOBS.map((j) => j.ns));
-const apiPod = (name, extra = {}) => ({
-  'app.kubernetes.io/name': name,
-  'app.kubernetes.io/instance': name,
-  'app.kubernetes.io/component': 'service',
-  ...extra,
-});
+const apiPod = (name) => ({ 'app.kubernetes.io/name': name, 'app.kubernetes.io/instance': name, 'app.kubernetes.io/component': 'service' });
 
 /** Kubernetes label selector semantics (matchLabels AND matchExpressions). */
 function selects(selector, labels) {
@@ -89,34 +164,39 @@ const selecting = (docs, ns, labels, type) =>
 const names = (docs) => docs.map((d) => d.metadata.name).sort();
 const rules = (docs) =>
   docs.map((d) => ({ name: d.metadata.name, ingress: d.spec.ingress, egress: d.spec.egress })).sort((a, b) => a.name.localeCompare(b.name));
-const workload = (c, j) => c.namespaces.find((n) => n.name === j.ns).workloads.find((w) => w.serviceAccount === j.sa);
+const workload = (c, j) => c.namespaces.find((n) => n.name === j.ns).workloads.find((w) => (w.name || w.serviceAccount) === j.name);
+const serviceSas = (ns) => [...new Set(serviceWorkloads(contract).filter((w) => w.ns === ns).map((w) => w.serviceAccount))].sort();
 
 for (const j of JOBS) {
-  test(`${j.ns}: the migration Job is a sidecar-less db-migration workload matching the chart pod labels`, () => {
+  const ref = `${j.ns}/${j.name}`;
+
+  test(`${ref}: a sidecar-less db-migration workload matching the chart pod labels and identity`, () => {
     const w = workload(contract, j);
-    assert.ok(w, `${j.ns}/${j.sa} is in the mesh contract`);
+    assert.ok(w, `${ref} is in the mesh contract`);
     assert.equal(w.role, 'db-migration');
     assert.equal(w.migrates, j.owner);
+    assert.equal(w.serviceAccount, j.sa, 'the ServiceAccount the chart renders the Job pod with');
+    if (j.sa === 'default') assert.equal(w.name, j.name, 'a Job on the namespace default ServiceAccount is named after its Job');
     assert.deepEqual(w.selector, { 'app.kubernetes.io/name': j.owner, 'app.kubernetes.io/component': 'db-migration' });
-    assert.ok(selects({ matchLabels: w.selector }, j.pod), 'selector matches the Job pod');
-    assert.ok(!selects({ matchLabels: w.selector }, apiPod(j.owner, j.podLabels)), 'selector does not match the API pods');
+    assert.ok(selects({ matchLabels: w.selector }, j.pod), 'selector matches the rendered Job pod labels');
+    assert.ok(!selects({ matchLabels: w.selector }, j.api), 'selector does not match the rendered API pod labels');
     assert.equal(w.sidecar, false);
     assert.equal(w.service, null);
     assert.equal(w.destinationRule, false);
     assert.deepEqual(w.datastores, ['aurora-postgresql']);
   });
 
-  test(`${j.ns}: the migration Job pod gets egress to DNS and its service's Aurora only`, () => {
+  test(`${ref}: the Job pod gets egress to DNS and its service's Aurora only`, () => {
     const egress = selecting(netpols, j.ns, j.pod, 'Egress');
     assert.deepEqual(names(egress), ['allow-egress-aurora', 'allow-egress-dns', 'default-deny-all']);
     const aurora = egress.find((d) => d.metadata.name === 'allow-egress-aurora');
-    assert.ok(selects(aurora.spec.podSelector, apiPod(j.owner, j.podLabels)), 'the API pods use the same Aurora policy');
+    assert.ok(selects(aurora.spec.podSelector, j.api), 'the API pods use the same Aurora policy');
     assert.deepEqual(aurora.spec.egress, [{ to: [{ ipBlock: { cidr: '192.0.2.0/24' } }], ports: [{ protocol: 'TCP', port: 5432 }] }]);
     const dns = egress.find((d) => d.metadata.name === 'allow-egress-dns');
     assert.deepEqual(dns.spec.egress.flatMap((r) => r.ports.map((p) => `${p.protocol}/${p.port}`)), ['UDP/53', 'TCP/53']);
   });
 
-  test(`${j.ns}: the migration Job pod gets no MSK, istiod, VPC, east-west egress and no ingress`, () => {
+  test(`${ref}: the Job pod gets no MSK, istiod, VPC, east-west egress and no ingress`, () => {
     const egress = names(selecting(netpols, j.ns, j.pod, 'Egress'));
     for (const n of ['allow-egress-msk', 'allow-egress-istiod', 'allow-egress-vpc-https', 'allow-egress-documentdb', 'allow-egress-redis']) {
       assert.ok(!egress.includes(n), `${n} selects the Job pod`);
@@ -124,51 +204,54 @@ for (const j of JOBS) {
     for (const n of egress) assert.ok(!/-to-/.test(n), `${n} gives the Job pod east-west egress`);
     assert.deepEqual(names(selecting(netpols, j.ns, j.pod, 'Ingress')), ['default-deny-all']);
     // The API pods keep everything they had.
-    const api = names(selecting(netpols, j.ns, apiPod(j.owner, j.podLabels), 'Egress'));
+    const api = names(selecting(netpols, j.ns, j.api, 'Egress'));
     for (const n of ['allow-egress-aurora', 'allow-egress-msk', 'allow-egress-istiod', 'allow-egress-vpc-https', `allow-egress-${j.owner}-to-identity`, `allow-egress-${j.owner}-to-observability`]) {
       assert.ok(api.includes(n), `${j.owner} API pods lost ${n}`);
     }
-    const apiIn = names(selecting(netpols, j.ns, apiPod(j.owner, j.podLabels), 'Ingress'));
+    const apiIn = names(selecting(netpols, j.ns, j.api, 'Ingress'));
     for (const n of ['allow-ingress-from-istio-ingress', 'allow-ingress-node-health', 'allow-ingress-observability-scrape']) {
       assert.ok(apiIn.includes(n), `${j.owner} API pods lost ${n}`);
     }
   });
 
-  test(`${j.ns}: the migration Job has no in-mesh identity, edge or secret slug`, () => {
+  test(`${ref}: the Job has no in-mesh identity, edge or secret slug`, () => {
     const p = principal(contract, j.ns, j.sa);
     for (const file of ['authorization-policies.yaml', 'request-authentication.yaml', 'destination-rules.yaml', 'ingress-routing.yaml', 'sidecars.yaml']) {
-      assert.ok(!generatedText(file).includes(j.sa), `${file} names ${j.sa}`);
+      assert.ok(!generatedText(file).includes(j.name), `${file} names ${j.name}`);
       assert.ok(!generatedText(file).includes(p), `${file} names ${p}`);
     }
-    assert.ok(!expandEdges(contract).some((e) => e.from.sa === j.sa || e.to.sa === j.sa));
-    assert.ok(!serviceWorkloads(contract).some((w) => w.serviceAccount === j.sa));
-    assert.deepEqual(secretScopes(contract)[j.ns], [j.owner]);
+    assert.ok(!expandEdges(contract).some((e) => (e.from.ns === j.ns && e.from.name === j.name) || (e.to.ns === j.ns && e.to.name === j.name)));
+    assert.ok(!expandEdges(contract).some((e) => (e.from.ns === j.ns && e.from.sa === j.sa) || (e.to.ns === j.ns && e.to.sa === j.sa)));
+    assert.ok(!serviceWorkloads(contract).some((w) => w.ns === j.ns && (w.name || w.serviceAccount) === j.name));
+    assert.ok(!secretScopes(contract)[j.ns].includes(j.sa), `${j.sa} is no secret slug of ${j.ns}`);
+    assert.deepEqual(secretScopes(contract)[j.ns], serviceSas(j.ns));
+    assert.ok(secretScopes(contract)[j.ns].includes(j.owner));
   });
 
-  test(`${j.ns}: R9 exception scoped to the Job, not the service`, () => {
+  test(`${ref}: R9 exception scoped to the Job, not the service`, () => {
     const refs = contract.exceptions.workloadInjection.map((x) => x.workload);
-    assert.ok(refs.includes(`${j.ns}/${j.sa}`));
+    assert.ok(refs.includes(ref));
     assert.ok(!refs.includes(`${j.ns}/${j.owner}`), 'the Deployment keeps its sidecar');
     const deployable = loadRepoDocs().filter((d) => ['deploy/', 'k8s/platform/'].some((x) => d.file.startsWith(x)));
     assert.deepEqual(checkZeroTrust(deployable, contract).filter((e) => e.startsWith('R9')), []);
     const c = structuredClone(contract);
-    c.exceptions.workloadInjection = c.exceptions.workloadInjection.filter((x) => x.workload !== `${j.ns}/${j.sa}`);
-    assert.ok(checkZeroTrust(deployable, c).some((e) => e.startsWith(`R9 ${j.ns}/${j.sa}`)));
+    c.exceptions.workloadInjection = c.exceptions.workloadInjection.filter((x) => x.workload !== ref);
+    assert.ok(checkZeroTrust(deployable, c).some((e) => e.startsWith(`R9 ${ref}`)));
   });
 }
 
-// Baseline: the same contract without the three Job workloads (and their exceptions).
+// Baseline: the same contract without the Job workloads (and their exceptions).
 const withoutJobs = () => {
   const c = structuredClone(contract);
   for (const j of JOBS) {
     const n = c.namespaces.find((x) => x.name === j.ns);
-    n.workloads = n.workloads.filter((w) => w.serviceAccount !== j.sa);
-    c.exceptions.workloadInjection = c.exceptions.workloadInjection.filter((x) => x.workload !== `${j.ns}/${j.sa}`);
+    n.workloads = n.workloads.filter((w) => (w.name || w.serviceAccount) !== j.name);
+    c.exceptions.workloadInjection = c.exceptions.workloadInjection.filter((x) => x.workload !== `${j.ns}/${j.name}`);
   }
   return c;
 };
 
-test('nothing else in customer, risk or compliance gains anything; other namespaces are unchanged', () => {
+test('nothing else in the Jobs\' namespaces gains anything; other namespaces are unchanged', () => {
   const now = render(contract);
   const before = render(withoutJobs());
   for (const file of Object.keys(now).filter((f) => f !== 'network-policies.yaml')) {
@@ -176,28 +259,33 @@ test('nothing else in customer, risk or compliance gains anything; other namespa
   }
   const outside = (docs) => docs.filter((d) => !JOB_NS.has(d.metadata.namespace));
   assert.deepEqual(outside(now['network-policies.yaml']), outside(before['network-policies.yaml']));
-  for (const j of JOBS) {
+  for (const ns of JOB_NS) {
     const probes = [
-      apiPod(j.owner, j.podLabels),
-      { 'app.kubernetes.io/name': j.owner }, // chart without a component label
-      { 'app.kubernetes.io/name': j.owner, 'app.kubernetes.io/component': 'history-guard-check' },
+      ...serviceWorkloads(contract).filter((w) => w.ns === ns).flatMap((w) => [
+        apiPod(w.serviceAccount),
+        { 'app.kubernetes.io/name': w.serviceAccount }, // chart without a component label (the ATM Deployment)
+        { 'app.kubernetes.io/name': w.serviceAccount, 'app.kubernetes.io/component': 'history-guard-check' },
+      ]),
+      ...JOBS.filter((j) => j.ns === ns).map((j) => j.api),
       { 'app.kubernetes.io/name': 'something-else', 'app.kubernetes.io/component': 'service' },
       {}, // any other pod in the namespace
     ];
     for (const labels of probes) {
       for (const type of ['Ingress', 'Egress']) {
         assert.deepEqual(
-          rules(selecting(now['network-policies.yaml'], j.ns, labels, type)),
-          rules(selecting(before['network-policies.yaml'], j.ns, labels, type)),
-          `${j.ns} ${type} of ${JSON.stringify(labels)} changed`,
+          rules(selecting(now['network-policies.yaml'], ns, labels, type)),
+          rules(selecting(before['network-policies.yaml'], ns, labels, type)),
+          `${ns} ${type} of ${JSON.stringify(labels)} changed`,
         );
       }
     }
+  }
+  for (const j of JOBS) {
     // The Job pod itself only loses: every rule it has now it also had before.
     for (const type of ['Ingress', 'Egress']) {
       const had = rules(selecting(before['network-policies.yaml'], j.ns, j.pod, type)).map((r) => JSON.stringify(r));
       for (const r of rules(selecting(now['network-policies.yaml'], j.ns, j.pod, type))) {
-        assert.ok(had.includes(JSON.stringify(r)), `${j.ns} Job pod gained ${type} ${r.name}`);
+        assert.ok(had.includes(JSON.stringify(r)), `${j.ns}/${j.name} Job pod gained ${type} ${r.name}`);
       }
     }
   }
@@ -206,16 +294,16 @@ test('nothing else in customer, risk or compliance gains anything; other namespa
 test('a pod with a Job pod\'s labels in another namespace gets nothing an unlabelled pod there does not get', () => {
   for (const j of JOBS) {
     for (const n of contract.namespaces.filter((x) => x.name !== j.ns)) {
-      // A subset: in customer, risk or compliance the component exclusion
-      // gives such a pod less than an unlabelled pod, never more.
+      // A subset: in a namespace with a sidecar-less db-migration Job the
+      // component exclusion gives such a pod less than an unlabelled pod, never more.
       for (const type of ['Ingress', 'Egress']) {
         const base = names(selecting(netpols, n.name, {}, type));
         for (const name of names(selecting(netpols, n.name, j.pod, type))) {
-          assert.ok(base.includes(name), `${j.ns} Job-labelled pod in ${n.name} gains ${type} ${name}`);
+          assert.ok(base.includes(name), `${j.ns}/${j.name} Job-labelled pod in ${n.name} gains ${type} ${name}`);
         }
       }
       const ports = selecting(netpols, n.name, j.pod, 'Egress').flatMap((d) => (d.spec.egress || []).flatMap((r) => (r.ports || []).map((p) => p.port)));
-      assert.ok(!ports.includes(5432), `${j.ns} Job-labelled pod reaches Aurora from ${n.name}`);
+      assert.ok(!ports.includes(5432), `${j.ns}/${j.name} Job-labelled pod reaches Aurora from ${n.name}`);
     }
   }
 });
@@ -234,12 +322,12 @@ test('renderer refuses a loose or extended migration Job; a meshed one keeps ist
     assert.throws(() => render(mutate(j, (w) => (w.destinationRule = true))), /no callee/);
     assert.throws(() => render(mutate(j, (w) => (w.sidecar = true))), /sidecar: false or absent/);
     assert.throws(
-      () => render(mutate(j, (w, c) => c.edges.push({ from: `${j.ns}/${j.sa}`, to: 'identity/keycloak', port: 8080, methods: ['GET'], paths: ['/realms/*'] }))),
+      () => render(mutate(j, (w, c) => c.edges.push({ from: `${j.ns}/${j.name}`, to: 'identity/keycloak', port: 8080, methods: ['GET'], paths: ['/realms/*'] }))),
       /no call edge/,
     );
   }
-  // A meshed Job (sidecar absent, native sidecar) is still rendered: istiod, never MSK.
-  const j = JOBS[0];
+  // A meshed Job on its own ServiceAccount (sidecar absent, native sidecar) is still rendered: istiod, never MSK.
+  const j = CRC[0];
   const meshed = render(mutate(j, (w) => delete w.sidecar))['network-policies.yaml'];
   const egress = names(selecting(meshed, j.ns, j.pod, 'Egress'));
   assert.ok(egress.includes('allow-egress-istiod') && egress.includes('allow-egress-aurora'), egress.join(', '));
@@ -247,70 +335,89 @@ test('renderer refuses a loose or extended migration Job; a meshed one keeps ist
   assert.doesNotThrow(() => render(contract));
 });
 
+// The namespace default ServiceAccount (a pod spec that names none) is shared
+// by every pod of the namespace without an account of its own, so it is never
+// an identity: only a sidecar-less Job (no principal) with a workload name of
+// its own may declare it, nothing may call or be called as <ns>/default, and
+// it is no known service account or principal.
+test('the namespace default ServiceAccount is never an identity', () => {
+  const rtp = DEFAULT_SA.find((j) => j.owner === 'payment-request-to-pay-service');
+  const mutate = (fn) => {
+    const c = structuredClone(contract);
+    fn(workload(c, rtp), c);
+    return c;
+  };
+  // Meshed on the default ServiceAccount: it would present cluster.local/ns/payments/sa/default.
+  assert.throws(() => render(mutate((w) => delete w.sidecar)), /payments\/payment-request-to-pay-service-db-migration.*namespace default ServiceAccount/);
+  // No name of its own: the workload reference would be payments/default.
+  assert.throws(() => render(mutate((w) => delete w.name)), /payments\/default.*namespace default ServiceAccount/);
+  // A service workload on the default ServiceAccount.
+  const svc = structuredClone(contract);
+  svc.namespaces.find((n) => n.name === 'open-finance').workloads.find((w) => w.serviceAccount === 'atm-directory-service').serviceAccount = 'default';
+  assert.throws(() => render(svc), /open-finance\/default.*namespace default ServiceAccount/);
+  // An edge naming <ns>/default.
+  const edge = structuredClone(contract);
+  edge.edges.push({ from: 'payments/default', to: 'identity/keycloak', port: 8080, methods: ['GET'], paths: ['/realms/*'] });
+  assert.throws(() => render(edge), /payments\/default.*namespace default ServiceAccount/);
+  for (const ns of JOB_NS) assert.ok(!knownServiceAccounts(contract).has(`${ns}/default`), `${ns}/default is a known service account`);
+  assert.doesNotThrow(() => render(contract));
+});
+
 // The namespace-wide policies exclude a sidecar-less Job by component only
 // (one selector cannot say NOT (name=X AND component=Y)). A meshed Job with the
 // same component in the same namespace would lose istiod, VPC endpoints and
 // ingress with it, and its proxy could not reach istiod, so the renderer
-// refuses that mix. Distinct components (a sidecar-less guard check next to a
-// meshed migration Job) still render, and the meshed Job keeps istiod.
+// refuses that mix. Every chart in the contract runs its db-migration Job
+// sidecar-less (request to pay too, since 2cd8e3c), so the refusal is shown
+// by giving one Job a native sidecar (and the ServiceAccount of its own a
+// meshed Job needs). Distinct components (a sidecar-less guard check next to
+// a meshed migration Job) still render, and the meshed Job keeps istiod.
 test('renderer refuses a namespace mixing sidecar-less and meshed Jobs of one component', () => {
-  const migration = (svc, sidecar) => ({
-    serviceAccount: `${svc}-db-migration`,
-    role: 'db-migration',
-    migrates: svc,
-    sourceRepo: 'example',
-    selector: { 'app.kubernetes.io/name': svc, 'app.kubernetes.io/component': 'db-migration' },
-    ...(sidecar === false ? { sidecar: false } : {}),
-    service: null,
-    destinationRule: false,
-    datastores: ['aurora-postgresql'],
-  });
-  const withJobs = (ns, jobs) => {
-    const c = structuredClone(contract);
-    const n = c.namespaces.find((x) => x.name === ns);
-    for (const [svc, sidecar] of jobs) {
-      n.workloads.push(migration(svc, sidecar));
-      if (sidecar === false) c.exceptions.workloadInjection.push({ workload: `${ns}/${svc}-db-migration`, reason: 'test' });
-    }
-    return c;
-  };
-  const egressOf = (c, ns, svc) =>
-    names(selecting(render(c)['network-policies.yaml'], ns, { 'app.kubernetes.io/name': svc, 'app.kubernetes.io/component': 'db-migration' }, 'Egress'));
-
-  // Payments: settlement's Job sidecar-less, request-to-pay's meshed (its chart default).
-  const mixed = withJobs('payments', [
-    ['payment-initiation-settlement-service', false],
-    ['payment-request-to-pay-service', undefined],
+  const PAYMENTS = DEFAULT_SA.filter((j) => j.ns === 'payments');
+  assert.deepEqual(PAYMENTS.map((j) => j.owner).sort(), [
+    'payment-bulk-orchestration-service',
+    'payment-initiation-settlement-service',
+    'payment-recurring-mandates-service',
+    'payment-request-to-pay-service',
   ]);
+  const egressOf = (c, ns, labels) => names(selecting(render(c)['network-policies.yaml'], ns, labels, 'Egress'));
+  // A meshed Job needs a ServiceAccount of its own (never the namespace default).
+  const meshedOn = (c, j) => {
+    const w = workload(c, j);
+    delete w.sidecar;
+    w.serviceAccount = j.name;
+    delete w.name;
+    c.exceptions.workloadInjection = c.exceptions.workloadInjection.filter((x) => x.workload !== `${j.ns}/${j.name}`);
+  };
+
+  // Payments: request to pay's Job meshed next to the three sidecar-less ones.
+  const mixed = structuredClone(contract);
+  meshedOn(mixed, PAYMENTS.find((j) => j.owner === 'payment-request-to-pay-service'));
   assert.throws(() => render(mixed), /payments\/payment-request-to-pay-service-db-migration.*component db-migration/);
 
   // Same in a CRC namespace: a meshed Job next to the sidecar-less one.
   const crc = structuredClone(contract);
-  crc.namespaces.find((n) => n.name === 'risk').workloads.push({
-    ...migration('risk-decisioning-service', undefined),
-    serviceAccount: 'risk-decisioning-service-db-migration-meshed',
-  });
+  const meshedRisk = { ...structuredClone(workload(contract, CRC[0])), serviceAccount: 'risk-decisioning-service-db-migration-meshed' };
+  delete meshedRisk.sidecar;
+  crc.namespaces.find((n) => n.name === 'risk').workloads.push(meshedRisk);
   assert.throws(() => render(crc), /risk\/risk-decisioning-service-db-migration-meshed.*component db-migration/);
 
-  // All sidecar-less, or all meshed: renders; meshed Jobs keep istiod and VPC endpoints.
-  const allOff = withJobs('payments', [
-    ['payment-initiation-settlement-service', false],
-    ['payment-request-to-pay-service', false],
-  ]);
-  for (const svc of ['payment-initiation-settlement-service', 'payment-request-to-pay-service']) {
-    assert.deepEqual(egressOf(allOff, 'payments', svc), ['allow-egress-aurora', 'allow-egress-dns', 'default-deny-all']);
-  }
-  const allOn = withJobs('payments', [
-    ['payment-initiation-settlement-service', undefined],
-    ['payment-request-to-pay-service', undefined],
-  ]);
-  for (const svc of ['payment-initiation-settlement-service', 'payment-request-to-pay-service']) {
-    const eg = egressOf(allOn, 'payments', svc);
-    assert.ok(eg.includes('allow-egress-istiod') && eg.includes('allow-egress-vpc-https'), `${svc}: ${eg.join(', ')}`);
+  // All sidecar-less (the contract): DNS and Aurora only.
+  for (const j of PAYMENTS) assert.deepEqual(egressOf(contract, 'payments', j.pod), ['allow-egress-aurora', 'allow-egress-dns', 'default-deny-all']);
+  // All meshed: renders; meshed Jobs keep istiod and VPC endpoints.
+  const allOn = structuredClone(contract);
+  for (const j of PAYMENTS) meshedOn(allOn, j);
+  for (const j of PAYMENTS) {
+    const eg = egressOf(allOn, 'payments', j.pod);
+    assert.ok(eg.includes('allow-egress-istiod') && eg.includes('allow-egress-vpc-https'), `${j.owner}: ${eg.join(', ')}`);
   }
 
   // A meshed migration Job next to the sidecar-less history-guard check (another component) renders and keeps istiod.
-  const ofMixed = withJobs('open-finance', [['open-products-catalog-service', undefined]]);
-  const eg = egressOf(ofMixed, 'open-finance', 'open-products-catalog-service');
+  const ofMixed = structuredClone(contract);
+  meshedOn(ofMixed, DEFAULT_SA.find((j) => j.owner === 'consent-authorization-service'));
+  const consentPod = DEFAULT_SA.find((j) => j.owner === 'consent-authorization-service').pod;
+  const eg = egressOf(ofMixed, 'open-finance', consentPod);
   assert.ok(eg.includes('allow-egress-istiod') && eg.includes('allow-egress-vpc-https'), eg.join(', '));
+  const checkPod = { 'app.kubernetes.io/name': 'open-products-catalog-service', 'app.kubernetes.io/component': 'history-guard-check' };
+  assert.deepEqual(egressOf(ofMixed, 'open-finance', checkPod), ['allow-egress-aurora', 'allow-egress-dns', 'default-deny-all']);
 });

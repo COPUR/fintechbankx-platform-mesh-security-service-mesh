@@ -33,12 +33,14 @@ export const SERVICE_COMPONENT = 'service';
 export const MIGRATION_COMPONENT = 'db-migration';
 
 /**
- * A Flyway migration Job (`role: db-migration`): a ServiceAccount of its own,
- * no Service, no inbound, no call edges (not part of the wildcards), no
- * RequestAuthentication and no secret slug of its own. It reaches only DNS
- * and the datastores it declares (Aurora only); with a sidecar (`sidecar`
- * absent) also istiod, without one (`sidecar: false`, as the customer, risk
- * and compliance charts run it) nothing else.
+ * A Flyway migration Job (`role: db-migration`): no Service, no inbound, no
+ * call edges (not part of the wildcards), no RequestAuthentication and no
+ * secret slug of its own. It runs as a ServiceAccount of its own (customer,
+ * risk, compliance) or as the namespace default ServiceAccount
+ * (`serviceAccount: default` with a `name` of its own: lending, payments,
+ * open-finance consent). It reaches only DNS and the datastores it declares
+ * (Aurora only); with a sidecar (`sidecar` absent) also istiod, without one
+ * (`sidecar: false`, as every service chart runs it) nothing else.
  */
 export function isMigrationJob(w) {
   return w.role === MIGRATION_COMPONENT;
@@ -81,11 +83,20 @@ export function serviceWorkloads(contract) {
   );
 }
 
-/** All known service accounts as `ns/sa` strings. */
+/**
+ * The namespace's `default` ServiceAccount: what a pod runs as when its spec
+ * names none. Every such pod of the namespace shares it, so it is never an
+ * identity: only a sidecar-less Job (no principal) with a workload `name` of
+ * its own may declare it (checkNamespaceDefaultServiceAccount), and it is no
+ * known service account or principal.
+ */
+export const NAMESPACE_DEFAULT_SA = 'default';
+
+/** All known service accounts as `ns/sa` strings (never a namespace default ServiceAccount). */
 export function knownServiceAccounts(contract) {
   const out = new Set();
   for (const n of contract.namespaces) {
-    for (const w of n.workloads || []) out.add(`${n.name}/${w.serviceAccount}`);
+    for (const w of n.workloads || []) if (w.serviceAccount !== NAMESPACE_DEFAULT_SA) out.add(`${n.name}/${w.serviceAccount}`);
   }
   out.add(`${contract.gateway.namespace}/${contract.gateway.serviceAccount}`);
   return out;
@@ -95,7 +106,9 @@ export function knownServiceAccounts(contract) {
 export function knownPrincipals(contract) {
   const meshed = new Set();
   for (const n of contract.namespaces) {
-    for (const w of n.workloads || []) if (w.sidecar !== false) meshed.add(`${n.name}/${w.serviceAccount}`);
+    for (const w of n.workloads || []) {
+      if (w.sidecar !== false && w.serviceAccount !== NAMESPACE_DEFAULT_SA) meshed.add(`${n.name}/${w.serviceAccount}`);
+    }
   }
   meshed.add(`${contract.gateway.namespace}/${contract.gateway.serviceAccount}`);
   return new Set(

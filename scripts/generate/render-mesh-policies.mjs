@@ -28,6 +28,7 @@ import {
   SERVICE_COMPONENT,
   MIGRATION_COMPONENT,
   GUARD_CHECK_COMPONENT,
+  NAMESPACE_DEFAULT_SA,
 } from '../lib/contract.mjs';
 
 export const outDir = join(repoRoot, 'deploy', 'kustomize', 'base', 'generated');
@@ -765,8 +766,9 @@ function mayMatch(selector, labels) {
 }
 
 // Sidecar-less Job pods (role db-migration or history-guard-check with
-// sidecar: false) get DNS and the stores their Job declares (Aurora) and
-// nothing else. Every other policy of the namespace that may select them
+// sidecar: false: the migration Jobs of every service chart with one, and the
+// products history-guard check) get DNS and the stores their Job declares
+// (Aurora) and nothing else. Every other policy of the namespace that may select them
 // (namespace-wide, or keyed on their service's name) excludes their
 // component (NotIn); a store policy excludes only the Jobs that do not
 // declare that store. Policies no such Job could match, and namespaces
@@ -1159,10 +1161,11 @@ function externalSecretAdmission(contract) {
 
 // ------------------------------------------------------------ migration jobs
 // A `role: db-migration` workload is a service's Flyway migration Job (Helm
-// pre-install/pre-upgrade hook) with a service account of its own. Its pods
-// carry the service's app.kubernetes.io/name and component db-migration, so
-// it shares the service's name-keyed Aurora egress; without a sidecar every
-// other policy that could select it excludes the component
+// pre-install/pre-upgrade hook), run as a service account of its own or as
+// the namespace default ServiceAccount (checkNamespaceDefaultServiceAccount).
+// Its pods carry the service's app.kubernetes.io/name and component
+// db-migration, so it shares the service's name-keyed Aurora egress; without
+// a sidecar every other policy that could select it excludes the component
 // (sidecarLessJobExclusion).
 const MIGRATION_STORES = new Set(['aurora-postgresql']);
 
@@ -1240,6 +1243,37 @@ export function checkGuardCheckJobs(contract) {
   }
 }
 
+// ------------------------------------------ namespace default ServiceAccount
+// A pod spec that names no ServiceAccount runs as the namespace's `default`
+// one (the lending and payments migration Jobs, consent's migrate Job), and so
+// does every other such pod of the namespace. It is never an identity: only a
+// sidecar-less Job (no sidecar, so no principal) with a workload name of its
+// own may declare it, and no edge may name <ns>/default. A meshed workload
+// needs a ServiceAccount of its own, or its principal would be shared.
+export function checkNamespaceDefaultServiceAccount(contract) {
+  for (const n of contract.namespaces) {
+    for (const w of (n.workloads || []).filter((x) => x.serviceAccount === NAMESPACE_DEFAULT_SA)) {
+      const ref = `${n.name}/${w.name || w.serviceAccount}`;
+      if (!isSidecarLessJob(w)) {
+        throw new Error(
+          `${ref}: only a sidecar-less Job (role db-migration or history-guard-check, sidecar: false) may run as the namespace default ServiceAccount; ` +
+            'a meshed workload needs a ServiceAccount of its own (its principal would be shared by every pod without one)',
+        );
+      }
+      if (!w.name || w.name === NAMESPACE_DEFAULT_SA) {
+        throw new Error(`${ref}: a Job on the namespace default ServiceAccount needs a workload name of its own (its Job name)`);
+      }
+    }
+  }
+  for (const e of contract.edges || []) {
+    for (const ref of [e.from, e.to]) {
+      if (ref.split('/')[1] === NAMESPACE_DEFAULT_SA) {
+        throw new Error(`edge ${e.from} -> ${e.to}: ${ref} is a namespace default ServiceAccount, never a caller or callee`);
+      }
+    }
+  }
+}
+
 // ------------------------------------------------- sidecar-less exclusion
 // sidecarLessJobExclusion narrows the namespace-wide policies by component
 // alone: one selector cannot say NOT (name=X AND component=Y). Any other
@@ -1276,6 +1310,7 @@ export function checkSidecarLessJobComponents(contract) {
 export function render(contract = loadContract()) {
   checkMigrationJobs(contract);
   checkGuardCheckJobs(contract);
+  checkNamespaceDefaultServiceAccount(contract);
   checkSidecarLessJobComponents(contract);
   return {
     'namespaces.yaml': namespaces(contract),

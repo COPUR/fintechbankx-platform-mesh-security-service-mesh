@@ -41,7 +41,12 @@ metadata:
   name: allow-egress-istiod
   namespace: lending
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -62,7 +67,12 @@ metadata:
   name: allow-ingress-node-health
   namespace: lending
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Ingress
   ingress:
@@ -81,7 +91,12 @@ metadata:
   name: allow-ingress-observability-scrape
   namespace: lending
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Ingress
   ingress:
@@ -106,7 +121,12 @@ metadata:
   name: allow-egress-vpc-https
   namespace: lending
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -173,7 +193,12 @@ metadata:
   name: allow-ingress-from-istio-ingress
   namespace: lending
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Ingress
   ingress:
@@ -194,7 +219,12 @@ metadata:
   name: allow-ingress-from-observability
   namespace: lending
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Ingress
   ingress:
@@ -218,6 +248,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: loan-lifecycle-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -241,6 +276,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: loan-lifecycle-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -264,6 +304,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: loan-lifecycle-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -321,7 +366,12 @@ metadata:
   name: allow-egress-istiod
   namespace: payments
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -342,7 +392,12 @@ metadata:
   name: allow-ingress-node-health
   namespace: payments
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Ingress
   ingress:
@@ -361,7 +416,12 @@ metadata:
   name: allow-ingress-observability-scrape
   namespace: payments
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Ingress
   ingress:
@@ -386,7 +446,12 @@ metadata:
   name: allow-egress-vpc-https
   namespace: payments
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -459,7 +524,12 @@ metadata:
   name: allow-ingress-from-istio-ingress
   namespace: payments
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Ingress
   ingress:
@@ -480,7 +550,12 @@ metadata:
   name: allow-ingress-from-observability
   namespace: payments
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Ingress
   ingress:
@@ -504,6 +579,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: payment-bulk-orchestration-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -527,6 +607,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: payment-bulk-orchestration-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -553,6 +638,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: payment-bulk-orchestration-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -576,6 +666,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: payment-initiation-settlement-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -599,6 +694,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: payment-initiation-settlement-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -622,6 +722,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: payment-initiation-settlement-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -645,6 +750,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: payment-initiation-settlement-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -671,6 +781,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: payment-initiation-settlement-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -694,6 +809,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: payment-initiation-settlement-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -717,6 +837,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: payment-recurring-mandates-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -740,6 +865,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: payment-recurring-mandates-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -766,6 +896,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: payment-recurring-mandates-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -789,6 +924,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: payment-request-to-pay-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -812,6 +952,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: payment-request-to-pay-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -1869,6 +2014,7 @@ spec:
       - key: app.kubernetes.io/component
         operator: NotIn
         values:
+          - db-migration
           - history-guard-check
   policyTypes:
     - Egress
@@ -1895,6 +2041,7 @@ spec:
       - key: app.kubernetes.io/component
         operator: NotIn
         values:
+          - db-migration
           - history-guard-check
   policyTypes:
     - Ingress
@@ -1919,6 +2066,7 @@ spec:
       - key: app.kubernetes.io/component
         operator: NotIn
         values:
+          - db-migration
           - history-guard-check
   policyTypes:
     - Ingress
@@ -1949,6 +2097,7 @@ spec:
       - key: app.kubernetes.io/component
         operator: NotIn
         values:
+          - db-migration
           - history-guard-check
   policyTypes:
     - Egress
@@ -2076,6 +2225,7 @@ spec:
       - key: app.kubernetes.io/component
         operator: NotIn
         values:
+          - db-migration
           - history-guard-check
   policyTypes:
     - Ingress
@@ -2102,6 +2252,7 @@ spec:
       - key: app.kubernetes.io/component
         operator: NotIn
         values:
+          - db-migration
           - history-guard-check
   policyTypes:
     - Ingress
@@ -2128,6 +2279,7 @@ spec:
       - key: app.kubernetes.io/component
         operator: NotIn
         values:
+          - db-migration
           - history-guard-check
   policyTypes:
     - Ingress
@@ -2311,6 +2463,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: consent-authorization-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:
@@ -2334,6 +2491,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: consent-authorization-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
   policyTypes:
     - Egress
   egress:

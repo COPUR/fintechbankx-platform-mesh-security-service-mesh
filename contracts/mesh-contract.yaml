@@ -126,6 +126,12 @@ gateway:
 
 # kind: service   -> bounded-context namespace with application workloads
 # kind: platform  -> platform namespace managed by a platform repo
+#
+# Workload keys: serviceAccount is the ServiceAccount the pods run as;
+# `serviceAccount: default` is the namespace default ServiceAccount (the pod
+# spec names none), allowed only on a sidecar-less Job with a `name` of its
+# own (the renderer refuses anything else: that account is shared by every
+# pod without one, so it is never an identity or principal).
 namespaces:
   - name: lending
     context: lending
@@ -136,6 +142,34 @@ namespaces:
         sourceRepo: fintechbankx-lendingpayments-loan-lifecycle-core
         apiPrefix: /api/v1/loans
         datastores: [aurora-postgresql, msk]
+      # Flyway migration Job (Helm pre-install/pre-upgrade hook), loan
+      # 629444d: deploy/helm/loan-lifecycle-service/templates/migration-job.yaml:55-74
+      # (pod labels loan.baseLabels: app.kubernetes.io/name <service> and
+      # instance <release>; component db-migration, fintechbankx.io/squad, and
+      # sidecar.istio.io/inject label and annotation from
+      # values migration.istioSidecar, false in values.yaml:171-174). No
+      # serviceAccountName: the pod runs as the namespace default
+      # ServiceAccount with automountServiceAccountToken false (no token, no
+      # IAM role). It mounts the hook Secret <service>-db-migration
+      # (DB_MIGRATION_USERNAME/_PASSWORD, synced by ESO from
+      # <env>/loan-lifecycle-service/db-migration) and the rds-ca-bundle
+      # ConfigMap, and opens JDBC to DB_URL only: the "migrate" context
+      # configures the DataSource and Flyway, no Kafka, web, security or AWS
+      # client, and authenticates with that password (no IAM DB auth, no STS).
+      # Selector, sidecar opt-out and policy shape as the customer Job:
+      # DNS and the name-keyed Aurora egress only.
+      - serviceAccount: default
+        name: loan-lifecycle-service-db-migration
+        role: db-migration
+        migrates: loan-lifecycle-service
+        sourceRepo: fintechbankx-lendingpayments-loan-lifecycle-core
+        selector:
+          app.kubernetes.io/name: loan-lifecycle-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
   - name: payments
     context: payments
     kind: service
@@ -165,6 +199,75 @@ namespaces:
         sourceRepo: fintechbankx-lendingpayments-payment-orchestration-bulk-orchestration
         apiPrefix: /open-finance/v1/file-payments   # TPP-facing, DPoP enforced by the service (contract DPoP section)
         datastores: [aurora-postgresql, msk]
+      # Flyway migration Jobs of the four payments services (Helm
+      # pre-install/pre-upgrade hooks, templates/migration-job.yaml of each
+      # chart): initiation/settlement 9671414 :54-73, recurring mandates
+      # ceb45b5 :58-77, bulk orchestration fe1d583 :55-79, request to pay
+      # 2cd8e3c :57-77. Each pod carries app.kubernetes.io/name <service>,
+      # instance <release> and component db-migration, with
+      # sidecar.istio.io/inject "false" as label and annotation (request to
+      # pay hard-codes it; the other three take values migration.istioSidecar,
+      # false). Each runs as the namespace default ServiceAccount (no
+      # serviceAccountName) with automountServiceAccountToken false: no
+      # token, no IAM role (request to pay's IRSA role is on the API
+      # ServiceAccount only). Each mounts its hook Secret
+      # <service>-db-migration (owner credential from
+      # <env>/<service>/db-migration: DB_MIGRATION_USERNAME/_PASSWORD, bulk
+      # SPRING_FLYWAY_USER/_PASSWORD) and the rds-ca-bundle ConfigMap, and
+      # opens JDBC to DB_URL only (the "migrate" context configures the
+      # DataSource and Flyway, no Kafka, web, security or AWS client; password
+      # auth, no IAM DB auth, no STS). All four are sidecar-less, so the
+      # shared component db-migration is excluded from every other payments
+      # policy (checkSidecarLessJobComponents). Same selector and policy shape
+      # as the customer Job: DNS and the name-keyed Aurora egress only.
+      - serviceAccount: default
+        name: payment-initiation-settlement-service-db-migration
+        role: db-migration
+        migrates: payment-initiation-settlement-service
+        sourceRepo: fintechbankx-lendingpayments-payment-orchestration-initiation-settlement
+        selector:
+          app.kubernetes.io/name: payment-initiation-settlement-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
+      - serviceAccount: default
+        name: payment-request-to-pay-service-db-migration
+        role: db-migration
+        migrates: payment-request-to-pay-service
+        sourceRepo: fintechbankx-lendingpayments-payment-orchestration-request-to-pay
+        selector:
+          app.kubernetes.io/name: payment-request-to-pay-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
+      - serviceAccount: default
+        name: payment-recurring-mandates-service-db-migration
+        role: db-migration
+        migrates: payment-recurring-mandates-service
+        sourceRepo: fintechbankx-lendingpayments-payment-orchestration-recurring-mandates
+        selector:
+          app.kubernetes.io/name: payment-recurring-mandates-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
+      - serviceAccount: default
+        name: payment-bulk-orchestration-service-db-migration
+        role: db-migration
+        migrates: payment-bulk-orchestration-service
+        sourceRepo: fintechbankx-lendingpayments-payment-orchestration-bulk-orchestration
+        selector:
+          app.kubernetes.io/name: payment-bulk-orchestration-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
   - name: customer
     context: customer
     kind: service
@@ -270,6 +373,34 @@ namespaces:
         # ALLOW) and /internal/v1 is never routed. Consent PR #13 a81579a.
         apiPrefix: [/open-finance/v1/consents, /oauth2, /api/v1/consents]
         datastores: [aurora-postgresql, msk]
+      # Flyway migration Job consent-authorization-service-migrate (Helm
+      # pre-install/pre-upgrade hook), consent e4f56b1:
+      # deploy/helm/consent-authorization-service/templates/migration-job.yaml:52-61,
+      # _helpers.tpl:34-38. Pod labels consent.migrationSelectorLabels
+      # (app.kubernetes.io/name <service>, instance <release>, component
+      # db-migration), fintechbankx.io/service-id and the label
+      # sidecar.istio.io/inject "false". Runs as the namespace default
+      # ServiceAccount (no serviceAccountName) with
+      # automountServiceAccountToken false: no token, no IAM role. Reads
+      # FLYWAY_PASSWORD from the hook Secret
+      # consent-authorization-service-db-migration (<env>/consent-authorization-service/db-migration)
+      # and mounts the rds-ca-bundle ConfigMap; DatabaseMigrationCommand is
+      # plain Flyway against DB_URL (password auth, no AWS client). The
+      # chart's own hook NetworkPolicy (networkpolicy-migration.yaml) also
+      # limits it to DNS and 5432. Same selector and policy shape as the
+      # customer Job: DNS and the name-keyed Aurora egress only.
+      - serviceAccount: default
+        name: consent-authorization-service-migrate
+        role: db-migration
+        migrates: consent-authorization-service
+        sourceRepo: fintechbankx-openfinance-consent-auth-service
+        selector:
+          app.kubernetes.io/name: consent-authorization-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
       - serviceAccount: payee-verification-service
         serviceId: svc-of-payee-verification
         sourceRepo: fintechbankx-openfinance-payee-metadata-payee-verification
@@ -568,6 +699,66 @@ exceptions:
         decision. Scoped to pods labelled app.kubernetes.io/name compliance-evidence-service
         AND component db-migration: DNS and the compliance Aurora (5432) only, no
         ingress, no principal. The compliance-evidence-service Deployment keeps its sidecar.
+    - workload: lending/loan-lifecycle-service-db-migration
+      reason: >-
+        Flyway migration Job of loan-lifecycle-service (loan 629444d, chart
+        templates/migration-job.yaml), run as the namespace default
+        ServiceAccount without a token. The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the
+        lending decision. Scoped to pods labelled app.kubernetes.io/name loan-lifecycle-service
+        AND component db-migration: DNS and the loan Aurora (5432) only, no
+        ingress, no principal. The loan-lifecycle-service Deployment keeps its sidecar.
+    - workload: payments/payment-initiation-settlement-service-db-migration
+      reason: >-
+        Flyway migration Job of payment-initiation-settlement-service (initiation/settlement 9671414, chart
+        templates/migration-job.yaml), run as the namespace default
+        ServiceAccount without a token. The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the
+        payments decision. Scoped to pods labelled app.kubernetes.io/name payment-initiation-settlement-service
+        AND component db-migration: DNS and the initiation/settlement Aurora (5432) only, no
+        ingress, no principal. The payment-initiation-settlement-service Deployment keeps its sidecar.
+    - workload: payments/payment-request-to-pay-service-db-migration
+      reason: >-
+        Flyway migration Job of payment-request-to-pay-service (request to pay 2cd8e3c, chart
+        templates/migration-job.yaml), run as the namespace default
+        ServiceAccount without a token. The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the
+        payments decision. Scoped to pods labelled app.kubernetes.io/name payment-request-to-pay-service
+        AND component db-migration: DNS and the request-to-pay Aurora (5432) only, no
+        ingress, no principal. The payment-request-to-pay-service Deployment keeps its sidecar.
+    - workload: payments/payment-recurring-mandates-service-db-migration
+      reason: >-
+        Flyway migration Job of payment-recurring-mandates-service (recurring mandates ceb45b5, chart
+        templates/migration-job.yaml), run as the namespace default
+        ServiceAccount without a token. The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the
+        payments decision. Scoped to pods labelled app.kubernetes.io/name payment-recurring-mandates-service
+        AND component db-migration: DNS and the recurring-mandates Aurora (5432) only, no
+        ingress, no principal. The payment-recurring-mandates-service Deployment keeps its sidecar.
+    - workload: payments/payment-bulk-orchestration-service-db-migration
+      reason: >-
+        Flyway migration Job of payment-bulk-orchestration-service (bulk orchestration fe1d583, chart
+        templates/migration-job.yaml), run as the namespace default
+        ServiceAccount without a token. The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the
+        payments decision. Scoped to pods labelled app.kubernetes.io/name payment-bulk-orchestration-service
+        AND component db-migration: DNS and the bulk-orchestration Aurora (5432) only, no
+        ingress, no principal. The payment-bulk-orchestration-service Deployment keeps its sidecar.
+    - workload: open-finance/consent-authorization-service-migrate
+      reason: >-
+        Flyway migration Job of consent-authorization-service (consent e4f56b1, chart
+        templates/migration-job.yaml), run as the namespace default
+        ServiceAccount without a token. The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the
+        open-finance decision. Scoped to pods labelled app.kubernetes.io/name consent-authorization-service
+        AND component db-migration: DNS and the consent Aurora (5432) only, no
+        ingress, no principal. The consent-authorization-service Deployment keeps its sidecar.
   peerAuthentication: []          # no PERMISSIVE or DISABLE anywhere
   requestAuthentication:
     - namespace: open-finance
