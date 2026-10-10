@@ -151,6 +151,10 @@ spec:
         operator: In
         values:
           - loan-lifecycle-service
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - service
   policyTypes:
     - Egress
   egress:
@@ -433,6 +437,10 @@ spec:
           - payment-initiation-settlement-service
           - payment-recurring-mandates-service
           - payment-request-to-pay-service
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - service
   policyTypes:
     - Egress
   egress:
@@ -971,6 +979,10 @@ spec:
         operator: In
         values:
           - customer-profile-kyc-service
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - service
   policyTypes:
     - Egress
   egress:
@@ -1266,6 +1278,10 @@ spec:
         operator: In
         values:
           - risk-decisioning-service
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - service
   policyTypes:
     - Egress
   egress:
@@ -1540,6 +1556,10 @@ spec:
         operator: In
         values:
           - compliance-evidence-service
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - service
   policyTypes:
     - Egress
   egress:
@@ -1821,6 +1841,10 @@ spec:
           - consent-authorization-service
           - payee-verification-service
           - personal-financial-data-service
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - service
   policyTypes:
     - Egress
   egress:

@@ -20,6 +20,10 @@ import {
   isException,
   resolveWorkload,
   secretScopes,
+  isMigrationJob,
+  COMPONENT_LABEL,
+  SERVICE_COMPONENT,
+  MIGRATION_COMPONENT,
 } from '../lib/contract.mjs';
 
 export const outDir = join(repoRoot, 'deploy', 'kustomize', 'base', 'generated');
@@ -114,6 +118,7 @@ function requestAuthentications(contract) {
   for (const n of serviceNamespaces(contract)) {
     if (isException(contract, 'requestAuthentication', n.name)) continue;
     for (const w of n.workloads || []) {
+      if (isMigrationJob(w)) continue; // no inbound, nothing to authenticate
       docs.push({
         apiVersion: SEC,
         kind: 'RequestAuthentication',
@@ -816,6 +821,10 @@ function networkPolicies(contract) {
     }
 
     // Datastores: egress only for the workloads that declare the store.
+    // Aurora (and the other stores) select on app.kubernetes.io/name only, so
+    // a service's Flyway migration Job pods (same name, component
+    // db-migration) reach its database. MSK also requires component=service:
+    // a migration Job never reaches the brokers.
     const x = contract.externalDependencies;
     const storePorts = {
       'aurora-postgresql': ['allow-egress-aurora', [x['aurora-postgresql'].port]],
@@ -831,15 +840,18 @@ function networkPolicies(contract) {
         .filter((w) => (w.datastores || []).includes(store))
         .map((w) => {
           const sel = resolveWorkload(contract, ns, w.name || w.serviceAccount).selector;
-          if (Object.keys(sel).length !== 1 || !sel['app.kubernetes.io/name']) {
+          // A migration Job's selector (name + component db-migration) is checked by checkMigrationJobs.
+          if (!isMigrationJob(w) && (Object.keys(sel).length !== 1 || !sel['app.kubernetes.io/name'])) {
             throw new Error(`${ns}/${w.serviceAccount}: datastore egress needs a selector on app.kubernetes.io/name only`);
           }
           return sel['app.kubernetes.io/name'];
         });
       if (!users.length) continue;
+      const matchExpressions = [{ key: 'app.kubernetes.io/name', operator: 'In', values: [...new Set(users)].sort() }];
+      if (store === 'msk') matchExpressions.push({ key: COMPONENT_LABEL, operator: 'In', values: [SERVICE_COMPONENT] });
       docs.push(
         np(ns, name, {
-          podSelector: { matchExpressions: [{ key: 'app.kubernetes.io/name', operator: 'In', values: [...new Set(users)].sort() }] },
+          podSelector: { matchExpressions },
           policyTypes: ['Egress'],
           egress: [{ to: [{ ipBlock: { cidr: cidr || PLACEHOLDER_CIDR } }], ports: tcp(ports) }],
         }),
@@ -1102,8 +1114,45 @@ function externalSecretAdmission(contract) {
   return [policy, binding];
 }
 
+// ------------------------------------------------------------ migration jobs
+// A `role: db-migration` workload is a service's Flyway migration Job (Helm
+// pre-install/pre-upgrade hook) with a service account of its own. Its pods
+// carry the service's app.kubernetes.io/name and component db-migration, so
+// it shares the service's name-keyed Aurora egress and nothing else.
+const MIGRATION_STORES = new Set(['aurora-postgresql']);
+
+export function checkMigrationJobs(contract) {
+  const refs = new Set((contract.edges || []).flatMap((e) => [e.from, e.to]));
+  for (const n of contract.namespaces) {
+    for (const w of (n.workloads || []).filter(isMigrationJob)) {
+      const ref = `${n.name}/${w.name || w.serviceAccount}`;
+      if (n.kind !== 'service') throw new Error(`${ref}: role db-migration belongs to a service namespace`);
+      const owner = (n.workloads || []).find((o) => !isMigrationJob(o) && o.serviceAccount === w.migrates);
+      if (!owner) throw new Error(`${ref}: migrates must name a service workload of namespace ${n.name}`);
+      const want = { 'app.kubernetes.io/name': owner.serviceAccount, [COMPONENT_LABEL]: MIGRATION_COMPONENT };
+      if (JSON.stringify(w.selector || {}) !== JSON.stringify(want)) {
+        throw new Error(`${ref}: selector must be exactly ${JSON.stringify(want)}`);
+      }
+      if (w.service !== null) throw new Error(`${ref}: a migration Job has no Service (service: null)`);
+      if (w.sidecar === false) throw new Error(`${ref}: a migration Job runs with a (native) sidecar`);
+      for (const k of ['apiPrefix', 'serviceId']) {
+        if (w[k] !== undefined) throw new Error(`${ref}: a migration Job takes no inbound traffic (${k})`);
+      }
+      const stores = w.datastores || [];
+      if (!stores.length || stores.some((d) => !MIGRATION_STORES.has(d))) {
+        throw new Error(`${ref}: a migration Job declares Aurora only (got ${stores.join(', ') || 'none'})`);
+      }
+      if (!(owner.datastores || []).includes('aurora-postgresql')) {
+        throw new Error(`${ref}: ${owner.serviceAccount} has no Aurora database to migrate`);
+      }
+      if (refs.has(ref)) throw new Error(`${ref}: a migration Job is in no call edge`);
+    }
+  }
+}
+
 // --------------------------------------------------------------------- write
 export function render(contract = loadContract()) {
+  checkMigrationJobs(contract);
   return {
     'namespaces.yaml': namespaces(contract),
     'peer-authentication.yaml': peerAuthentications(contract),

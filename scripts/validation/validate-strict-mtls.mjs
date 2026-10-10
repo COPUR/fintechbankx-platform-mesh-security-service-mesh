@@ -52,6 +52,7 @@ import {
   injectedNamespaces,
   isException,
   secretScopes,
+  isMigrationJob,
 } from '../lib/contract.mjs';
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'build', '.gradle']);
@@ -236,6 +237,7 @@ export function checkZeroTrust(docs, contract) {
   for (const n of serviceNamespaces(contract)) {
     if (isException(contract, 'requestAuthentication', n.name)) continue;
     for (const w of n.workloads || []) {
+      if (isMigrationJob(w)) continue; // no inbound traffic
       const ok = ras.some(
         (d) =>
           nsOf(d) === n.name &&

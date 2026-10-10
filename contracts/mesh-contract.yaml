@@ -192,6 +192,24 @@ namespaces:
         sourceRepo: fintechbankx-riskcompliance-compliance-evidence-core
         apiPrefix: /api/v1/compliance
         datastores: [aurora-postgresql, msk]
+      # Flyway migration Job (Helm pre-install/pre-upgrade hook, compliance
+      # chart templates/migration-job.yaml, branch
+      # claude/customer-risk-compliance-deployable-ygi0zo 1d1a5d2). Own
+      # ServiceAccount, no API token; its pods carry the service's
+      # app.kubernetes.io/name and component db-migration. Modelled on
+      # identity/keycloak-realm-import (native sidecar so the Job completes),
+      # but narrower: Aurora egress (name-keyed policy), DNS and istiod only;
+      # no MSK, no inbound, no call edge, no telemetry edge, no secret slug.
+      - serviceAccount: compliance-evidence-service-db-migration
+        role: db-migration
+        migrates: compliance-evidence-service
+        sourceRepo: fintechbankx-riskcompliance-compliance-evidence-core
+        selector:
+          app.kubernetes.io/name: compliance-evidence-service
+          app.kubernetes.io/component: db-migration
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
   - name: open-finance
     context: open-finance
     kind: service
@@ -919,6 +937,10 @@ externalDependencies:
     port: 6379
     protocol: TCP
     cidrParam: REDIS_CIDR
+  # allow-egress-msk selects app.kubernetes.io/name AND
+  # app.kubernetes.io/component=service (the API pods); the other stores select
+  # on the name only, so a service's migration Job pods (component
+  # db-migration) reach Aurora but never the brokers.
   msk:
     hosts: ["*.kafka.me-central-1.amazonaws.com"]
     ports: [9098, 9094]

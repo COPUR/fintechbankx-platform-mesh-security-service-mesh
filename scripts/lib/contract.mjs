@@ -23,10 +23,29 @@ export function injectedNamespaces(contract) {
   return contract.namespaces.filter((n) => !n.injection || n.injection === 'enabled');
 }
 
-/** Every workload that lives in a `kind: service` namespace. */
+/**
+ * Pod label that tells a service's pods apart (cicd-templates 335a345): the
+ * API pods carry `service`, the Flyway migration Job pods `db-migration`;
+ * both carry app.kubernetes.io/name=<service account of the service>.
+ */
+export const COMPONENT_LABEL = 'app.kubernetes.io/component';
+export const SERVICE_COMPONENT = 'service';
+export const MIGRATION_COMPONENT = 'db-migration';
+
+/**
+ * A Flyway migration Job (`role: db-migration`): a principal of its own, no
+ * Service, no inbound, no call edges (not part of the wildcards), no
+ * RequestAuthentication and no secret slug of its own. It reaches only DNS,
+ * istiod and the datastores it declares (Aurora only).
+ */
+export function isMigrationJob(w) {
+  return w.role === MIGRATION_COMPONENT;
+}
+
+/** Every service workload (not a migration Job) in a `kind: service` namespace. */
 export function serviceWorkloads(contract) {
   return serviceNamespaces(contract).flatMap((n) =>
-    (n.workloads || []).map((w) => ({ ns: n.name, ...w })),
+    (n.workloads || []).filter((w) => !isMigrationJob(w)).map((w) => ({ ns: n.name, ...w })),
   );
 }
 
@@ -93,6 +112,7 @@ function expandEndpoint(contract, ref) {
     const out = [resolveWorkload(contract, contract.gateway.namespace, contract.gateway.serviceAccount)];
     for (const n of injectedNamespaces(contract)) {
       for (const w of n.workloads || []) {
+        if (isMigrationJob(w)) continue; // Aurora only, no telemetry edge
         const r = resolveWorkload(contract, n.name, w.name || w.serviceAccount);
         if (r.sidecar && !out.some((o) => o.ns === r.ns && o.sa === r.sa)) out.push(r);
       }
@@ -142,7 +162,9 @@ export function isException(contract, kind, ns) {
 export function secretScopes(contract) {
   const out = {};
   for (const n of serviceNamespaces(contract)) {
-    out[n.name] = [...new Set((n.workloads || []).map((w) => w.serviceAccount))].sort();
+    // A migration Job reads its service's keys (<env>/<service sa>/db-migration),
+    // labelled with the service's name: no slug of its own.
+    out[n.name] = [...new Set((n.workloads || []).filter((w) => !isMigrationJob(w)).map((w) => w.serviceAccount))].sort();
   }
   for (const [ns, slugs] of Object.entries(contract.secrets?.sharedStoreNamespaces || {})) {
     out[ns] = [...slugs].sort();

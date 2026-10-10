@@ -59,7 +59,7 @@ selected per workload, not per namespace.
 | AuthN | `generated/request-authentication.yaml` | Gateway: issuer only. Each workload: issuer + `aud` = its service id. All read tokens from `Authorization` (`Bearer `, `DPoP `) only, never a query parameter |
 | AuthZ | `generated/authorization-policies.yaml` | `default-deny` per injected namespace, ALLOW per caller principal per edge, `require-jwt-for-api` DENY, health on 8081 |
 | Traffic | `generated/destination-rules.yaml`, `generated/service-entries.yaml`, `generated/sidecars.yaml`, `generated/ingress-routing.yaml` | See resilience mapping |
-| NetworkPolicy | `generated/network-policies.yaml` | Default-deny, DNS, istiod 15012, node health 15020/15021, scraping, edge-derived ingress/egress, Aurora/MSK/VPC-endpoint CIDRs |
+| NetworkPolicy | `generated/network-policies.yaml` | Default-deny, DNS, istiod 15012, node health 15020/15021, scraping, edge-derived ingress/egress, Aurora/MSK/VPC-endpoint CIDRs; Aurora egress keys on `app.kubernetes.io/name`, MSK egress on the name plus `app.kubernetes.io/component=service` (see "Database migration Jobs") |
 | Secrets | `k8s/platform/external-secrets/`, `deploy/kustomize/base/ingress-tls-externalsecret.yaml`, `deploy/kustomize/base/generated/externalsecret-admission.yaml` | `aws-secrets-manager` (IRSA SA `external-secrets`; conditions: namespaces labelled `fintechbankx.io/namespace-kind=service` and `observability`); `aws-secrets-manager-platform` (IRSA SA `external-secrets-platform`; conditions: `cert-manager`, `istio-ingress`, `identity`) for the internal CA, ingress TLS (`<env>/platform/ingress-tls`), corporate directory CA and Keycloak material; ValidatingAdmissionPolicy `fintechbankx-externalsecret-scope` + Deny binding: outside the platform-store namespaces an ExternalSecret must use `aws-secrets-manager` and read only `<env>/<slug>/` keys, where in a service namespace `<slug>` is its `app.kubernetes.io/name` label and one of that namespace's service accounts (payments holds four), and no remote key may end in `/db-import` (the operator import credential of terraform-modules `operator-db-access` is never synced into a cluster). Validator rule R10 checks the structure; the CEL runs only in a kube-apiserver |
 | PKI install | `deploy/cert-manager/` (versions, Helm values), `deploy/kustomize/platform-pki/<env>/`, `components/platform-params` | cert-manager and trust-manager installed by this repo before Istio; see "Platform PKI install" |
 | Internal TLS | `k8s/platform/cert-manager/` | ClusterIssuer `fintechbankx-internal-ca` (CA issuer; key pair synced by ExternalSecret from `<env>/platform/internal-ca` into ns `cert-manager`, no material in git); trust-manager Bundle `fintechbankx-internal-ca` -> ConfigMap `fintechbankx-internal-ca` (key `ca.crt`) in every namespace labelled `fintechbankx.io/namespace-kind` |
@@ -91,6 +91,71 @@ Only values backed by the dependency-resilience policy pack are set:
 - Scraping: `enablePrometheusMerge` serves app + Envoy metrics on 15020 (plain
   text, allowed by NetworkPolicy from `observability/prometheus`). A Prometheus
   with its own sidecar can also scrape 8081 over mTLS; the AuthZ rule allows it.
+
+### Database migration Jobs (Proposed)
+
+Each service runs Flyway in a Helm `pre-install,pre-upgrade` hook Job, never in
+the API pods (cicd-templates 335a345). The Job pods carry the service's
+`app.kubernetes.io/name` and `app.kubernetes.io/component=db-migration`; the API
+pods carry `component=service`.
+
+- `allow-egress-aurora` (and DocumentDB, Redis) select on the name only, so the
+  Job reaches its service's database.
+- `allow-egress-msk` selects the name **and** `component=service`: a migration
+  pod, or any pod without the component label, never reaches the brokers.
+  Every service chart must label its API pods `app.kubernetes.io/component:
+  service`; a chart without it loses MSK egress (fail closed).
+- The compliance Job runs as its own ServiceAccount
+  `compliance-evidence-service-db-migration`, listed in the contract as a
+  `role: db-migration` workload (`migrates: compliance-evidence-service`,
+  selector name + component). It gets no RequestAuthentication, no
+  AuthorizationPolicy, no call or telemetry edge and no secret slug (its
+  ExternalSecret carries the service's name and reads
+  `<env>/compliance-evidence-service/db-migration`). The renderer refuses a
+  migration workload with MSK, a looser selector, an `apiPrefix`/`serviceId`
+  or an edge (`tests/migration-job-egress.test.mjs`).
+- Known overlap: the service's edge-derived egress NetworkPolicies key on the
+  name only, so they also open Keycloak 8080 and the collector 4317/4318 to
+  the Job pod at L3/L4. Istio denies it there (no ALLOW names the Job's
+  principal). Narrowing them to `component=service` waits for every chart to
+  carry the label. `allow-egress-vpc-https` (443 to VPC endpoints) is
+  namespace-wide.
+- The other services' Jobs (loan-lifecycle, payment initiation/settlement,
+  request-to-pay, recurring mandates, bulk orchestration, consent
+  authorization) run as the namespace `default` ServiceAccount with no token,
+  so they need no contract entry; Aurora egress reaches them by the name label.
+
+**Drill checklist for the first dev-cluster install** (not run yet; record the
+evidence with the install log). Use `helm upgrade --install ... --timeout 15m`
+(the Job's `activeDeadlineSeconds` is 600 s; Helm's 5 min default is shorter).
+
+- [ ] The hook Job completes: `kubectl -n compliance get job
+  compliance-evidence-service-db-migration` shows `COMPLETIONS 1/1` and the
+  Helm release reaches `deployed`; the Job log shows Flyway's applied version.
+  A failed or timed-out Job must fail the install and leave the Deployment
+  untouched.
+- [ ] ESO syncs the migration secret within 600 s: the ExternalSecret
+  `compliance-evidence-service-db-migration` reaches `Ready=True`
+  (`SecretSynced`) and the pod leaves `CreateContainerConfigError` well inside
+  the Job's 600 s `activeDeadlineSeconds` (the deadline counts from Job start,
+  so a slow sync eats migration time). Record the sync time from the
+  ExternalSecret status.
+- [ ] The native sidecar exits so the Job finishes: the pod spec shows
+  `istio-proxy` under `initContainers` with `restartPolicy: Always`
+  (istiod `ENABLE_NATIVE_SIDECARS`); after the `db-migration` container exits 0
+  the pod phase is `Succeeded` with no `istio-proxy` still running. A pod stuck
+  `Running`/`NotReady` with only the proxy alive means the sidecar was injected
+  as a regular container.
+- [ ] Mesh path: in `istio-proxy` stats or access logs of the Job pod, Aurora
+  5432 goes through `outbound|5432||aurora-postgresql.fintechbankx.internal`,
+  with no `BlackHoleCluster` hits and no MSK (9098/9094) connection attempt.
+- [ ] Hook resources are deleted per `helm.sh/hook-delete-policy`: after
+  success the ServiceAccount and the db-migration ExternalSecret
+  (`before-hook-creation,hook-succeeded`) are gone, and with them the synced
+  Secret (`creationPolicy: Owner`); the Job (`before-hook-creation`) stays for
+  its logs until `ttlSecondsAfterFinished` (86400 s) or the next install or
+  upgrade replaces it. `kubectl -n compliance get secret
+  compliance-evidence-service-db-migration` must return NotFound.
 
 ## Identity namespace
 
