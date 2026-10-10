@@ -260,8 +260,10 @@ namespaces:
       # History-guard check pods (products PR #14, chart templates/
       # history-guard-check.yaml): the 15-minute verify CronJob and the
       # pre-upgrade gate Job. They run as the Deployment's ServiceAccount
-      # WITHOUT a sidecar (sidecar.istio.io/inject "false"; documented
-      # exception below) and carry app.kubernetes.io/name
+      # WITHOUT a sidecar because the products chart opts out
+      # (sidecar.istio.io/inject "false"; documented exception below). The
+      # mesh does not need that opt-out: native sidecars let a Job complete.
+      # They carry app.kubernetes.io/name
       # open-products-catalog-service and component history-guard-check.
       # They get DNS and the products Aurora egress (the name-keyed
       # allow-egress-aurora, 5432 to AURORA_CIDR) and nothing else: every other
@@ -474,7 +476,7 @@ exceptions:
     - workload: observability/prometheus-operator
       reason: >-
         The kube-apiserver (outside the mesh) calls the operator's admission
-        webhook on 10250; its admission Jobs would never finish with a sidecar.
+        webhook on 10250.
     - workload: observability/kube-state-metrics
       reason: Only scraped by Prometheus (plain HTTP 8080, NetworkPolicy-scoped); talks only to the kube-apiserver.
     - workload: observability/node-exporter
@@ -482,7 +484,13 @@ exceptions:
     - workload: open-finance/open-products-catalog-service-history-guard-check
       reason: >-
         Products history-guard verify CronJob and pre-upgrade gate Job
-        (products PR #14); a sidecar would keep the Job from completing.
+        (products PR #14). The products chart sets sidecar.istio.io/inject
+        "false" on them; this mesh does not require it (istiod injects native
+        sidecars, so a Job completes with one, as the db-migration and
+        keycloak-realm-import Jobs do). Accepted as the owner's choice pending
+        the open-finance/products decision; if products drops the opt-out,
+        the pods run meshed like the migration Jobs (no ALLOW names them) and
+        this entry and the renderer's sidecar-less rule are revisited.
         Scoped to pods labelled app.kubernetes.io/name
         open-products-catalog-service AND component history-guard-check: DNS
         and the products Aurora (5432) only, no ingress, no principal. The

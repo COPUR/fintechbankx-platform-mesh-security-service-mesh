@@ -125,40 +125,6 @@ pods carry `component=service`.
   authorization) run as the namespace `default` ServiceAccount with no token,
   so they need no contract entry; Aurora egress reaches them by the name label.
 
-### Products history-guard check pods (Proposed)
-
-open-products-catalog-service (products PR #14) runs `fbx_history_guard.verify()`
-from two Jobs: the 15-minute verify CronJob
-`open-products-catalog-service-history-guard-check` and the `pre-upgrade` gate
-Job `open-products-catalog-service-history-guard-gate`. Their pods run as the
-Deployment's ServiceAccount **without** a sidecar (`sidecar.istio.io/inject:
-"false"`, a sidecar would keep the Job from completing) and carry
-`app.kubernetes.io/name=open-products-catalog-service` and
-`app.kubernetes.io/component=history-guard-check`.
-
-- Contract: the `role: history-guard-check` workload
-  `open-finance/open-products-catalog-service-history-guard-check`
-  (`checks: open-products-catalog-service`, selector name + component,
-  `sidecar: false`, Aurora only) and its `exceptions.workloadInjection` entry
-  (validator R9). The products Deployment keeps its sidecar.
-- Egress: `allow-egress-dns` and the name-keyed `allow-egress-aurora`
-  (5432 to `AURORA_CIDR`, the policy the products API pods use) only.
-- Every other open-finance NetworkPolicy that could select them excludes
-  `component=history-guard-check` (`NotIn`): `allow-egress-istiod`,
-  `allow-egress-vpc-https`, `allow-ingress-node-health`,
-  `allow-ingress-observability-scrape`, `allow-ingress-from-<namespace>` and
-  products' edge egress to identity and observability. So: no istiod, no VPC
-  endpoints, no MSK (that policy already requires `component=service`), no
-  east-west, no ingress. No pod without that component label is affected.
-- No AuthorizationPolicy, RequestAuthentication, call or telemetry edge or
-  secret slug names the check pods; the renderer refuses an edge, a sidecar,
-  a looser selector, MSK or an `apiPrefix` for the workload
-  (`tests/history-guard-check-egress.test.mjs`).
-- The chart must keep both labels on the check pods. Without
-  `component=history-guard-check` the pods would fall back to everything the
-  products API pods get at L3/L4 (fail open to the products baseline, not
-  beyond it); without the name label they lose Aurora (fail closed).
-
 **Drill checklist for the first dev-cluster install** (not run yet; record the
 evidence with the install log). Use `helm upgrade --install ... --timeout 15m`
 (the Job's `activeDeadlineSeconds` is 600 s; Helm's 5 min default is shorter).
@@ -190,6 +156,57 @@ evidence with the install log). Use `helm upgrade --install ... --timeout 15m`
   its logs until `ttlSecondsAfterFinished` (86400 s) or the next install or
   upgrade replaces it. `kubectl -n compliance get secret
   compliance-evidence-service-db-migration` must return NotFound.
+
+### Products history-guard check pods (Proposed)
+
+open-products-catalog-service (products PR #14) runs `fbx_history_guard.verify()`
+from two Jobs: the 15-minute verify CronJob
+`open-products-catalog-service-history-guard-check` and the `pre-upgrade` gate
+Job `open-products-catalog-service-history-guard-gate`. Their pods run as the
+Deployment's ServiceAccount **without** a sidecar, because the products chart
+sets `sidecar.istio.io/inject: "false"` on them, and carry
+`app.kubernetes.io/name=open-products-catalog-service` and
+`app.kubernetes.io/component=history-guard-check`. This mesh does not need
+that opt-out: istiod injects native sidecars (`ENABLE_NATIVE_SIDECARS`), so a
+Job completes with a sidecar, as the migration Jobs above and the
+`keycloak-realm-import` Job do. The exception records the owner's choice,
+not a mesh constraint.
+
+- Contract: the `role: history-guard-check` workload
+  `open-finance/open-products-catalog-service-history-guard-check`
+  (`checks: open-products-catalog-service`, selector name + component,
+  `sidecar: false`, Aurora only) and its `exceptions.workloadInjection` entry
+  (validator R9). The products Deployment keeps its sidecar.
+- Egress: `allow-egress-dns` and the name-keyed `allow-egress-aurora`
+  (5432 to `AURORA_CIDR`, the policy the products API pods use) only.
+- Every other open-finance NetworkPolicy that could select them excludes
+  `component=history-guard-check` (`NotIn`): `allow-egress-istiod`,
+  `allow-egress-vpc-https`, `allow-ingress-node-health`,
+  `allow-ingress-observability-scrape`, `allow-ingress-from-<namespace>` and
+  products' edge egress to identity and observability. So: no istiod, no VPC
+  endpoints, no MSK (that policy already requires `component=service`), no
+  east-west, no ingress. No pod without that component label is affected.
+- No AuthorizationPolicy, RequestAuthentication, call or telemetry edge or
+  secret slug names the check pods; the renderer refuses an edge, a sidecar,
+  a looser selector, MSK or an `apiPrefix` for the workload
+  (`tests/history-guard-check-egress.test.mjs`).
+- The chart must keep both labels on the check pods. Without
+  `component=history-guard-check` the pods would fall back to everything the
+  products API pods get at L3/L4 (fail open to the products baseline, not
+  beyond it); without the name label they lose Aurora (fail closed).
+
+Open asks for the open-finance/products thread (not mesh defects):
+
+- Sidecar opt-out. Products may drop `sidecar.istio.io/inject: "false"` and
+  run the check pods meshed with no ALLOW naming them, as the migration Jobs
+  do; the `exceptions.workloadInjection` entry and the renderer's sidecar-less
+  rule for `role: history-guard-check` would then be revisited. The
+  NetworkPolicy scoping above holds either way.
+- Tracing. The check pods `envFrom` the products ConfigMap, which sets
+  `TRACING_ENABLED="true"` and the collector OTLP endpoint (4318); their
+  egress to the collector is blocked by design. Products may set
+  `TRACING_ENABLED=false` in the check pod env to avoid export errors or an
+  exporter timeout at shutdown (runtime effect not reproduced).
 
 ## Identity namespace
 
@@ -259,7 +276,8 @@ handshake and failure counters for `MeshMtlsHandshakeFailures`.
 | injection | istio-system | Control plane |
 | injection | external-secrets | Platform contract addendum; ESO webhook is called by the kube-apiserver |
 | injection | cert-manager | cert-manager / trust-manager webhooks are called by the kube-apiserver; holds the internal CA key pair |
-| workloadInjection (R9) | observability/prometheus-operator, kube-state-metrics, node-exporter | API-server webhook and Jobs; scrape-only; hostNetwork. NetworkPolicy only, never a principal |
+| workloadInjection (R9) | observability/prometheus-operator, kube-state-metrics, node-exporter | API-server webhook; scrape-only; hostNetwork. NetworkPolicy only, never a principal |
+| workloadInjection (R9) | open-finance/open-products-catalog-service-history-guard-check | Products chart opts its check pods out (not a mesh constraint; open ask). DNS and products Aurora only, never a principal |
 | requestAuthentication | open-finance | Own DPoP/FAPI tokens with a per-service issuer; open data is public |
 | networkPolicyDefaultDeny | istio-system, external-secrets, cert-manager | Webhooks called from EKS control-plane ENIs; not yet drilled |
 

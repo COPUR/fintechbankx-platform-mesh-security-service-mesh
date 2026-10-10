@@ -1,8 +1,9 @@
 // open-products-catalog-service history-guard check pods (products PR #14,
 // deploy/helm/open-products-catalog-service/templates/history-guard-check.yaml):
 // the 15-minute verify CronJob and the pre-upgrade gate Job. Their pods run
-// WITHOUT an Istio sidecar (sidecar.istio.io/inject "false"; a sidecar would
-// keep the Job from completing), as the Deployment's ServiceAccount, and call
+// WITHOUT an Istio sidecar (the chart sets sidecar.istio.io/inject "false";
+// the mesh does not need it, since native sidecars let a Job complete), as
+// the Deployment's ServiceAccount, and call
 // fbx_history_guard.verify() on the products Aurora database.
 //  - they reach DNS and the products Aurora database (5432) and nothing else:
 //    no istiod, no VPC endpoints, no MSK, no east-west, no ingress;

@@ -142,3 +142,11 @@ test('renderer refuses a migration Job with MSK, a loose selector, a call edge o
   );
   assert.doesNotThrow(() => render(contract));
 });
+
+test('the migration drill checklist stays under the Database migration Jobs section', () => {
+  const doc = readFileSync(join(repoRoot, 'docs/mesh/DEPLOYABLE_MESH_BASELINE.md'), 'utf8').split('\n');
+  const at = doc.findIndex((l) => l.startsWith('**Drill checklist for the first dev-cluster install**'));
+  assert.ok(at > 0, 'drill checklist present');
+  const heading = doc.slice(0, at).reverse().find((l) => /^#{1,6} /.test(l));
+  assert.equal(heading, '### Database migration Jobs (Proposed)');
+});

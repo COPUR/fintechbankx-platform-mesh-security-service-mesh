@@ -30,3 +30,23 @@ test('the gateway pins numTrustedProxies 0', () => {
     assert.equal(values(`env/${env}/gateway.values.yaml`).podAnnotations?.['proxy.istio.io/config'], undefined, `${env} must not override it`);
   }
 });
+
+// With native sidecars a Job completes inside the mesh (db-migration Jobs,
+// keycloak-realm-import), so "a sidecar keeps a Job from completing" is never
+// a valid reason to run a workload without one. A sidecar-less workload's
+// exception must say why it is actually needed, or that it is the owner's
+// choice pending review.
+const JOB_COMPLETION_CLAIM =
+  /\bjobs?\b[^.;]*\b(never (finish|complete)|from (finishing|completing))\b|\b(keeps?|stops?|prevents?|blocks?)\b[^.;]*\bjobs?\b[^.;]*\b(finish|complet)/i;
+
+test('no sidecar exception rests on Jobs not completing with a sidecar', () => {
+  const contract = YAML.parse(readFileSync(join(repoRoot, 'contracts/mesh-contract.yaml'), 'utf8'));
+  const reasons = [...(contract.exceptions.injection || []), ...(contract.exceptions.workloadInjection || [])];
+  for (const x of reasons) {
+    assert.doesNotMatch(x.reason, JOB_COMPLETION_CLAIM, x.namespace || x.workload);
+  }
+  const doc = readFileSync(join(repoRoot, 'docs/mesh/DEPLOYABLE_MESH_BASELINE.md'), 'utf8');
+  for (const line of doc.split(/\n\s*\n/)) {
+    assert.doesNotMatch(line.replace(/\s+/g, ' '), JOB_COMPLETION_CLAIM, line.slice(0, 120));
+  }
+});
