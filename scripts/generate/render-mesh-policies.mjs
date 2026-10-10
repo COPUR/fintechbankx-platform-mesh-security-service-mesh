@@ -21,9 +21,12 @@ import {
   resolveWorkload,
   secretScopes,
   isMigrationJob,
+  isGuardCheckJob,
+  isJobWorkload,
   COMPONENT_LABEL,
   SERVICE_COMPONENT,
   MIGRATION_COMPONENT,
+  GUARD_CHECK_COMPONENT,
 } from '../lib/contract.mjs';
 
 export const outDir = join(repoRoot, 'deploy', 'kustomize', 'base', 'generated');
@@ -118,7 +121,7 @@ function requestAuthentications(contract) {
   for (const n of serviceNamespaces(contract)) {
     if (isException(contract, 'requestAuthentication', n.name)) continue;
     for (const w of n.workloads || []) {
-      if (isMigrationJob(w)) continue; // no inbound, nothing to authenticate
+      if (isJobWorkload(w)) continue; // no inbound, nothing to authenticate
       docs.push({
         apiVersion: SEC,
         kind: 'RequestAuthentication',
@@ -745,6 +748,36 @@ function np(ns, name, spec) {
   return { apiVersion: 'networking.k8s.io/v1', kind: 'NetworkPolicy', metadata: { name, namespace: ns }, spec };
 }
 const nsSel = (ns) => ({ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': ns } } });
+
+// Can this pod selector match a pod with these name/component labels? Keys
+// other than name and component are ignored (assumed to match), so a
+// selector that might select a guard-check pod counts as selecting it.
+function mayMatch(selector, labels) {
+  for (const [k, v] of Object.entries(selector.matchLabels || {})) if (k in labels && labels[k] !== v) return false;
+  for (const e of selector.matchExpressions || []) {
+    if (!(e.key in labels)) continue;
+    if (e.operator === 'In' && !e.values.includes(labels[e.key])) return false;
+    if (e.operator === 'NotIn' && e.values.includes(labels[e.key])) return false;
+    if (e.operator === 'DoesNotExist') return false;
+  }
+  return true;
+}
+
+// Guard-check pods (role history-guard-check) run without a sidecar: they get
+// DNS and their service's Aurora egress and nothing else. Every other policy
+// of the namespace that may select them (namespace-wide, or keyed on their
+// service's name) excludes their component. Namespaces without a guard check
+// are unchanged.
+function guardExclusion(contract, n) {
+  const guards = (n.workloads || []).filter(isGuardCheckJob).map((w) => resolveWorkload(contract, n.name, w.name).selector);
+  const components = [...new Set(guards.map((g) => g[COMPONENT_LABEL]))].sort();
+  return (selector) => {
+    if (!guards.some((g) => mayMatch(selector, g))) return selector;
+    const out = structuredClone(selector);
+    out.matchExpressions = [...(out.matchExpressions || []), { key: COMPONENT_LABEL, operator: 'NotIn', values: components }];
+    return out;
+  };
+}
 const tcp = (ports) => ports.map((port) => ({ protocol: 'TCP', port: Number(port) }));
 
 function peerSelector(contract, ref) {
@@ -763,6 +796,7 @@ function networkPolicies(contract) {
   for (const n of contract.namespaces) {
     if (isException(contract, 'networkPolicyDefaultDeny', n.name)) continue;
     const ns = n.name;
+    const narrow = guardExclusion(contract, n);
     docs.push(np(ns, 'default-deny-all', { podSelector: {}, policyTypes: ['Ingress', 'Egress'] }));
     docs.push(
       np(ns, 'allow-egress-dns', {
@@ -781,7 +815,7 @@ function networkPolicies(contract) {
     );
     docs.push(
       np(ns, 'allow-egress-istiod', {
-        podSelector: {},
+        podSelector: narrow({}),
         policyTypes: ['Egress'],
         egress: [{ to: [{ ...nsSel('istio-system'), podSelector: { matchLabels: { app: 'istiod' } } }], ports: tcp([15012]) }],
       }),
@@ -789,7 +823,7 @@ function networkPolicies(contract) {
     // Kubelet probes (rewritten to the agent on 15020) and sidecar readiness (15021) come from the nodes.
     docs.push(
       np(ns, 'allow-ingress-node-health', {
-        podSelector: {},
+        podSelector: narrow({}),
         policyTypes: ['Ingress'],
         ingress: [{ from: [{ ipBlock: { cidr: PLACEHOLDER_CIDR } }], ports: tcp([15020, 15021]) }],
       }),
@@ -798,7 +832,7 @@ function networkPolicies(contract) {
     if (ns !== 'observability') {
       docs.push(
         np(ns, 'allow-ingress-observability-scrape', {
-          podSelector: {},
+          podSelector: narrow({}),
           policyTypes: ['Ingress'],
           ingress: [
             {
@@ -813,7 +847,7 @@ function networkPolicies(contract) {
     if ((n.workloads || []).length > 0 || ns === gw.namespace) {
       docs.push(
         np(ns, 'allow-egress-vpc-https', {
-          podSelector: {},
+          podSelector: narrow({}),
           policyTypes: ['Egress'],
           egress: [{ to: [{ ipBlock: { cidr: PLACEHOLDER_CIDR } }], ports: tcp([443]) }],
         }),
@@ -824,7 +858,8 @@ function networkPolicies(contract) {
     // Aurora (and the other stores) select on app.kubernetes.io/name only, so
     // a service's Flyway migration Job pods (same name, component
     // db-migration) reach its database. MSK also requires component=service:
-    // a migration Job never reaches the brokers.
+    // a migration Job never reaches the brokers. A guard check reaches only
+    // the stores it declares (Aurora); any other store policy excludes it.
     const x = contract.externalDependencies;
     const storePorts = {
       'aurora-postgresql': ['allow-egress-aurora', [x['aurora-postgresql'].port]],
@@ -840,8 +875,8 @@ function networkPolicies(contract) {
         .filter((w) => (w.datastores || []).includes(store))
         .map((w) => {
           const sel = resolveWorkload(contract, ns, w.name || w.serviceAccount).selector;
-          // A migration Job's selector (name + component db-migration) is checked by checkMigrationJobs.
-          if (!isMigrationJob(w) && (Object.keys(sel).length !== 1 || !sel['app.kubernetes.io/name'])) {
+          // A Job's selector (name + component) is checked by checkMigrationJobs / checkGuardCheckJobs.
+          if (!isJobWorkload(w) && (Object.keys(sel).length !== 1 || !sel['app.kubernetes.io/name'])) {
             throw new Error(`${ns}/${w.serviceAccount}: datastore egress needs a selector on app.kubernetes.io/name only`);
           }
           return sel['app.kubernetes.io/name'];
@@ -849,9 +884,10 @@ function networkPolicies(contract) {
       if (!users.length) continue;
       const matchExpressions = [{ key: 'app.kubernetes.io/name', operator: 'In', values: [...new Set(users)].sort() }];
       if (store === 'msk') matchExpressions.push({ key: COMPONENT_LABEL, operator: 'In', values: [SERVICE_COMPONENT] });
+      const guardsStore = (n.workloads || []).some((w) => isGuardCheckJob(w) && (w.datastores || []).includes(store));
       docs.push(
         np(ns, name, {
-          podSelector: { matchExpressions },
+          podSelector: guardsStore ? { matchExpressions } : narrow({ matchExpressions }),
           policyTypes: ['Egress'],
           egress: [{ to: [{ ipBlock: { cidr: cidr || PLACEHOLDER_CIDR } }], ports: tcp(ports) }],
         }),
@@ -896,14 +932,14 @@ function networkPolicies(contract) {
         const { e } = v;
         docs.push(
           np(ns, `allow-ingress-${e.from.name}-to-${e.to.name}-${e.port}`, {
-            podSelector: { matchLabels: e.to.selector },
+            podSelector: narrow({ matchLabels: e.to.selector }),
             policyTypes: ['Ingress'],
             ingress: [{ from: [{ podSelector: { matchLabels: e.from.selector } }], ports: tcp([e.port]) }],
           }),
         );
         docs.push(
           np(ns, `allow-egress-${e.from.name}-to-${e.to.name}-${e.port}`, {
-            podSelector: { matchLabels: e.from.selector },
+            podSelector: narrow({ matchLabels: e.from.selector }),
             policyTypes: ['Egress'],
             egress: [{ to: [{ podSelector: { matchLabels: e.to.selector } }], ports: tcp([e.port]) }],
           }),
@@ -912,7 +948,7 @@ function networkPolicies(contract) {
       }
       docs.push(
         np(ns, `allow-ingress-from-${k}`, {
-          podSelector: {},
+          podSelector: narrow({}),
           policyTypes: ['Ingress'],
           ingress: [
             {
@@ -926,7 +962,7 @@ function networkPolicies(contract) {
     for (const [, v] of [...outbound.entries()].sort(([a], [b]) => a.localeCompare(b))) {
       docs.push(
         np(ns, `allow-egress-${v.from.name}-to-${v.toNs}`, {
-          podSelector: { matchLabels: peerSelector(contract, v.from).podSelector.matchLabels },
+          podSelector: narrow({ matchLabels: peerSelector(contract, v.from).podSelector.matchLabels }),
           policyTypes: ['Egress'],
           egress: [...v.callees.keys()].sort().map((name) => {
             const c = v.callees.get(name);
@@ -974,7 +1010,7 @@ function networkPolicies(contract) {
     if (lookup[ns].kind === 'platform' && (n.workloads || []).length > 1) {
       docs.push(
         np(ns, 'allow-same-namespace', {
-          podSelector: {},
+          podSelector: narrow({}),
           policyTypes: ['Ingress', 'Egress'],
           ingress: [{ from: [{ podSelector: {} }] }],
           egress: [{ to: [{ podSelector: {} }] }],
@@ -1127,7 +1163,7 @@ export function checkMigrationJobs(contract) {
     for (const w of (n.workloads || []).filter(isMigrationJob)) {
       const ref = `${n.name}/${w.name || w.serviceAccount}`;
       if (n.kind !== 'service') throw new Error(`${ref}: role db-migration belongs to a service namespace`);
-      const owner = (n.workloads || []).find((o) => !isMigrationJob(o) && o.serviceAccount === w.migrates);
+      const owner = (n.workloads || []).find((o) => !isJobWorkload(o) && o.serviceAccount === w.migrates);
       if (!owner) throw new Error(`${ref}: migrates must name a service workload of namespace ${n.name}`);
       const want = { 'app.kubernetes.io/name': owner.serviceAccount, [COMPONENT_LABEL]: MIGRATION_COMPONENT };
       if (JSON.stringify(w.selector || {}) !== JSON.stringify(want)) {
@@ -1150,9 +1186,50 @@ export function checkMigrationJobs(contract) {
   }
 }
 
+// --------------------------------------------------------- guard check jobs
+// A `role: history-guard-check` workload is a service's database guard check
+// (products PR #14: the verify CronJob and the pre-upgrade gate Job). Its pods
+// carry the service's app.kubernetes.io/name and component
+// history-guard-check, run without a sidecar (exceptions.workloadInjection,
+// validator R9) and share the service's name-keyed Aurora egress; every other
+// policy that could select them excludes the component (guardExclusion).
+const GUARD_CHECK_STORES = new Set(['aurora-postgresql']);
+
+export function checkGuardCheckJobs(contract) {
+  const refs = new Set((contract.edges || []).flatMap((e) => [e.from, e.to]));
+  for (const n of contract.namespaces) {
+    for (const w of (n.workloads || []).filter(isGuardCheckJob)) {
+      const ref = `${n.name}/${w.name || w.serviceAccount}`;
+      if (n.kind !== 'service') throw new Error(`${ref}: role ${GUARD_CHECK_COMPONENT} belongs to a service namespace`);
+      if (!w.name || w.name === w.serviceAccount) throw new Error(`${ref}: a guard check needs a workload name of its own`);
+      const owner = (n.workloads || []).find((o) => !isJobWorkload(o) && o.serviceAccount === w.checks);
+      if (!owner) throw new Error(`${ref}: checks must name a service workload of namespace ${n.name}`);
+      const want = { 'app.kubernetes.io/name': owner.serviceAccount, [COMPONENT_LABEL]: GUARD_CHECK_COMPONENT };
+      if (JSON.stringify(w.selector || {}) !== JSON.stringify(want)) {
+        throw new Error(`${ref}: selector must be exactly ${JSON.stringify(want)}`);
+      }
+      if (w.sidecar !== false) throw new Error(`${ref}: a guard check runs without a sidecar (sidecar: false)`);
+      if (w.service !== null) throw new Error(`${ref}: a guard check has no Service (service: null)`);
+      if (w.destinationRule !== false) throw new Error(`${ref}: a guard check is no callee (destinationRule: false)`);
+      for (const k of ['apiPrefix', 'serviceId']) {
+        if (w[k] !== undefined) throw new Error(`${ref}: a guard check takes no inbound traffic (${k})`);
+      }
+      const stores = w.datastores || [];
+      if (!stores.length || stores.some((d) => !GUARD_CHECK_STORES.has(d))) {
+        throw new Error(`${ref}: a guard check declares Aurora only (got ${stores.join(', ') || 'none'})`);
+      }
+      if (!(owner.datastores || []).includes('aurora-postgresql')) {
+        throw new Error(`${ref}: ${owner.serviceAccount} has no Aurora database to check`);
+      }
+      if (refs.has(ref)) throw new Error(`${ref}: a guard check is in no call edge`);
+    }
+  }
+}
+
 // --------------------------------------------------------------------- write
 export function render(contract = loadContract()) {
   checkMigrationJobs(contract);
+  checkGuardCheckJobs(contract);
   return {
     'namespaces.yaml': namespaces(contract),
     'peer-authentication.yaml': peerAuthentications(contract),

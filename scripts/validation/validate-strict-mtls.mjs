@@ -20,7 +20,8 @@
 //     (unless exceptions.requestAuthentication).
 //  R8 generated manifests match the contract rendering.
 //  R9 every workload declared without a sidecar is listed in
-//     exceptions.workloadInjection.
+//     exceptions.workloadInjection (e.g. the open-finance products
+//     history-guard check pods, scoped by name + component).
 //  R10 secret scoping (contract `secrets`): the service ClusterSecretStore has
 //     conditions selecting only service namespaces and the shared namespaces;
 //     the platform store names only the platform-store namespaces and uses its
@@ -52,7 +53,7 @@ import {
   injectedNamespaces,
   isException,
   secretScopes,
-  isMigrationJob,
+  isJobWorkload,
 } from '../lib/contract.mjs';
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'build', '.gradle']);
@@ -237,7 +238,7 @@ export function checkZeroTrust(docs, contract) {
   for (const n of serviceNamespaces(contract)) {
     if (isException(contract, 'requestAuthentication', n.name)) continue;
     for (const w of n.workloads || []) {
-      if (isMigrationJob(w)) continue; // no inbound traffic
+      if (isJobWorkload(w)) continue; // migration / guard-check Job: no inbound traffic
       const ok = ras.some(
         (d) =>
           nsOf(d) === n.name &&

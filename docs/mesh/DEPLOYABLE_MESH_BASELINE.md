@@ -125,6 +125,40 @@ pods carry `component=service`.
   authorization) run as the namespace `default` ServiceAccount with no token,
   so they need no contract entry; Aurora egress reaches them by the name label.
 
+### Products history-guard check pods (Proposed)
+
+open-products-catalog-service (products PR #14) runs `fbx_history_guard.verify()`
+from two Jobs: the 15-minute verify CronJob
+`open-products-catalog-service-history-guard-check` and the `pre-upgrade` gate
+Job `open-products-catalog-service-history-guard-gate`. Their pods run as the
+Deployment's ServiceAccount **without** a sidecar (`sidecar.istio.io/inject:
+"false"`, a sidecar would keep the Job from completing) and carry
+`app.kubernetes.io/name=open-products-catalog-service` and
+`app.kubernetes.io/component=history-guard-check`.
+
+- Contract: the `role: history-guard-check` workload
+  `open-finance/open-products-catalog-service-history-guard-check`
+  (`checks: open-products-catalog-service`, selector name + component,
+  `sidecar: false`, Aurora only) and its `exceptions.workloadInjection` entry
+  (validator R9). The products Deployment keeps its sidecar.
+- Egress: `allow-egress-dns` and the name-keyed `allow-egress-aurora`
+  (5432 to `AURORA_CIDR`, the policy the products API pods use) only.
+- Every other open-finance NetworkPolicy that could select them excludes
+  `component=history-guard-check` (`NotIn`): `allow-egress-istiod`,
+  `allow-egress-vpc-https`, `allow-ingress-node-health`,
+  `allow-ingress-observability-scrape`, `allow-ingress-from-<namespace>` and
+  products' edge egress to identity and observability. So: no istiod, no VPC
+  endpoints, no MSK (that policy already requires `component=service`), no
+  east-west, no ingress. No pod without that component label is affected.
+- No AuthorizationPolicy, RequestAuthentication, call or telemetry edge or
+  secret slug names the check pods; the renderer refuses an edge, a sidecar,
+  a looser selector, MSK or an `apiPrefix` for the workload
+  (`tests/history-guard-check-egress.test.mjs`).
+- The chart must keep both labels on the check pods. Without
+  `component=history-guard-check` the pods would fall back to everything the
+  products API pods get at L3/L4 (fail open to the products baseline, not
+  beyond it); without the name label they lose Aurora (fail closed).
+
 **Drill checklist for the first dev-cluster install** (not run yet; record the
 evidence with the install log). Use `helm upgrade --install ... --timeout 15m`
 (the Job's `activeDeadlineSeconds` is 600 s; Helm's 5 min default is shorter).

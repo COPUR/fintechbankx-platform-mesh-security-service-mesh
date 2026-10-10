@@ -1724,7 +1724,12 @@ metadata:
   name: allow-egress-istiod
   namespace: open-finance
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - history-guard-check
   policyTypes:
     - Egress
   egress:
@@ -1745,7 +1750,12 @@ metadata:
   name: allow-ingress-node-health
   namespace: open-finance
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - history-guard-check
   policyTypes:
     - Ingress
   ingress:
@@ -1764,7 +1774,12 @@ metadata:
   name: allow-ingress-observability-scrape
   namespace: open-finance
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - history-guard-check
   policyTypes:
     - Ingress
   ingress:
@@ -1789,7 +1804,12 @@ metadata:
   name: allow-egress-vpc-https
   namespace: open-finance
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - history-guard-check
   policyTypes:
     - Egress
   egress:
@@ -1911,7 +1931,12 @@ metadata:
   name: allow-ingress-from-istio-ingress
   namespace: open-finance
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - history-guard-check
   policyTypes:
     - Ingress
   ingress:
@@ -1932,7 +1957,12 @@ metadata:
   name: allow-ingress-from-observability
   namespace: open-finance
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - history-guard-check
   policyTypes:
     - Ingress
   ingress:
@@ -1953,7 +1983,12 @@ metadata:
   name: allow-ingress-from-payments
   namespace: open-finance
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - history-guard-check
   policyTypes:
     - Ingress
   ingress:
@@ -2185,6 +2220,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: open-products-catalog-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - history-guard-check
   policyTypes:
     - Egress
   egress:
@@ -2208,6 +2248,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: open-products-catalog-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - history-guard-check
   policyTypes:
     - Egress
   egress:

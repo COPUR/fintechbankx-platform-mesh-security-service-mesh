@@ -42,10 +42,30 @@ export function isMigrationJob(w) {
   return w.role === MIGRATION_COMPONENT;
 }
 
-/** Every service workload (not a migration Job) in a `kind: service` namespace. */
+/**
+ * A database guard check (`role: history-guard-check`, products PR #14): the
+ * verify CronJob and the pre-upgrade gate Job of the service named in
+ * `checks`. Its pods carry that service's app.kubernetes.io/name and
+ * component history-guard-check and run WITHOUT a sidecar (documented R9
+ * exception): no principal, no Service, no inbound, no call edge, no
+ * RequestAuthentication, no secret slug. They reach only DNS and the
+ * service's Aurora database; every other policy that could select them
+ * (namespace-wide or keyed on the service's name) excludes the component.
+ */
+export const GUARD_CHECK_COMPONENT = 'history-guard-check';
+export function isGuardCheckJob(w) {
+  return w.role === GUARD_CHECK_COMPONENT;
+}
+
+/** A Job workload (migration or guard check): never a service, caller or callee. */
+export function isJobWorkload(w) {
+  return isMigrationJob(w) || isGuardCheckJob(w);
+}
+
+/** Every service workload (not a migration or guard-check Job) in a `kind: service` namespace. */
 export function serviceWorkloads(contract) {
   return serviceNamespaces(contract).flatMap((n) =>
-    (n.workloads || []).filter((w) => !isMigrationJob(w)).map((w) => ({ ns: n.name, ...w })),
+    (n.workloads || []).filter((w) => !isJobWorkload(w)).map((w) => ({ ns: n.name, ...w })),
   );
 }
 
@@ -112,7 +132,7 @@ function expandEndpoint(contract, ref) {
     const out = [resolveWorkload(contract, contract.gateway.namespace, contract.gateway.serviceAccount)];
     for (const n of injectedNamespaces(contract)) {
       for (const w of n.workloads || []) {
-        if (isMigrationJob(w)) continue; // Aurora only, no telemetry edge
+        if (isJobWorkload(w)) continue; // Aurora only, no telemetry edge
         const r = resolveWorkload(contract, n.name, w.name || w.serviceAccount);
         if (r.sidecar && !out.some((o) => o.ns === r.ns && o.sa === r.sa)) out.push(r);
       }
@@ -163,8 +183,9 @@ export function secretScopes(contract) {
   const out = {};
   for (const n of serviceNamespaces(contract)) {
     // A migration Job reads its service's keys (<env>/<service sa>/db-migration),
-    // labelled with the service's name: no slug of its own.
-    out[n.name] = [...new Set((n.workloads || []).filter((w) => !isMigrationJob(w)).map((w) => w.serviceAccount))].sort();
+    // labelled with the service's name, and a guard check mounts the service's
+    // runtime secret: no slug of their own.
+    out[n.name] = [...new Set((n.workloads || []).filter((w) => !isJobWorkload(w)).map((w) => w.serviceAccount))].sort();
   }
   for (const [ns, slugs] of Object.entries(contract.secrets?.sharedStoreNamespaces || {})) {
     out[ns] = [...slugs].sort();

@@ -257,6 +257,29 @@ namespaces:
         sourceRepo: fintechbankx-openfinance-open-data-products-catalog
         apiPrefix: /open-finance/v1/products
         datastores: [aurora-postgresql]
+      # History-guard check pods (products PR #14, chart templates/
+      # history-guard-check.yaml): the 15-minute verify CronJob and the
+      # pre-upgrade gate Job. They run as the Deployment's ServiceAccount
+      # WITHOUT a sidecar (sidecar.istio.io/inject "false"; documented
+      # exception below) and carry app.kubernetes.io/name
+      # open-products-catalog-service and component history-guard-check.
+      # They get DNS and the products Aurora egress (the name-keyed
+      # allow-egress-aurora, 5432 to AURORA_CIDR) and nothing else: every other
+      # open-finance policy that could select them excludes the component
+      # (no istiod, VPC endpoints, MSK, east-west or ingress). No principal, no
+      # Service, no call or telemetry edge, no secret slug.
+      - serviceAccount: open-products-catalog-service
+        name: open-products-catalog-service-history-guard-check
+        role: history-guard-check
+        checks: open-products-catalog-service
+        sourceRepo: fintechbankx-openfinance-open-data-products-catalog
+        selector:
+          app.kubernetes.io/name: open-products-catalog-service
+          app.kubernetes.io/component: history-guard-check
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
   - name: identity
     context: identity
     kind: platform
@@ -456,6 +479,14 @@ exceptions:
       reason: Only scraped by Prometheus (plain HTTP 8080, NetworkPolicy-scoped); talks only to the kube-apiserver.
     - workload: observability/node-exporter
       reason: hostNetwork DaemonSet; scraped on the node IP (9100).
+    - workload: open-finance/open-products-catalog-service-history-guard-check
+      reason: >-
+        Products history-guard verify CronJob and pre-upgrade gate Job
+        (products PR #14); a sidecar would keep the Job from completing.
+        Scoped to pods labelled app.kubernetes.io/name
+        open-products-catalog-service AND component history-guard-check: DNS
+        and the products Aurora (5432) only, no ingress, no principal. The
+        products Deployment keeps its sidecar.
   peerAuthentication: []          # no PERMISSIVE or DISABLE anywhere
   requestAuthentication:
     - namespace: open-finance
