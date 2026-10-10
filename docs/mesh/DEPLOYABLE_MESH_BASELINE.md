@@ -175,7 +175,9 @@ DocumentDB data services render no migration.
   workload with MSK, a looser selector, an `apiPrefix`/`serviceId`, a
   DestinationRule, `sidecar: true` or an edge; a migration workload without
   `sidecar` (native sidecar) on a ServiceAccount of its own still renders
-  with istiod egress and never MSK (`tests/migration-job-egress.test.mjs`,
+  with istiod egress and never MSK, but only in a namespace whose other
+  `db-migration` Jobs are meshed too (next point; today none is)
+  (`tests/migration-job-egress.test.mjs`,
   `tests/sidecarless-migration-job-egress.test.mjs`).
 - The exclusion is by component alone (one selector cannot say NOT (name AND
   component)), so a meshed Job with the component of a sidecar-less Job in the

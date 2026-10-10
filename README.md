@@ -123,20 +123,28 @@ A service chart must (platform contract addendum, 2026-10-08):
   and broker ports that carry their own TLS (5432 Aurora with `verify-full`,
   27017 DocumentDB, 6379 Redis with TLS, 9093 Strimzi mutual TLS); the
   workload's egress NetworkPolicy still limits where those ports go;
-- run a Flyway migration Job either with the sidecar (native sidecar, the
-  default) or with `sidecar.istio.io/inject: "false"`; either way its pods
-  carry `app.kubernetes.io/name=<sa>` (Aurora egress) and
-  `app.kubernetes.io/component=db-migration` (never MSK). A sidecar-less Job
-  is listed in the contract as a `role: db-migration` workload with
-  `sidecar: false` and an `exceptions.workloadInjection` entry, as the
-  lending, payments, customer, risk, compliance and consent Jobs are (a Job
-  without `serviceAccountName` is `serviceAccount: default` with its Job
-  name as `name`; the namespace default ServiceAccount is accepted only
-  there); its pods then reach DNS and their service's Aurora only (no
-  istiod, VPC endpoints, east-west or ingress), and never a mesh service
-  (STRICT mTLS). The renderer refuses a namespace where a meshed workload
-  shares the component label of a sidecar-less Job (the exclusion is by
-  component, so the meshed one would lose istiod);
+- run its Flyway migration Job without a sidecar
+  (`sidecar.istio.io/inject: "false"` on the pod), as every service chart
+  does today, with pods labelled `app.kubernetes.io/name=<sa>` (Aurora
+  egress) and `app.kubernetes.io/component=db-migration` (never MSK), and
+  list it in the contract as a `role: db-migration` workload with `sidecar:
+  false` and an `exceptions.workloadInjection` entry (a Job without
+  `serviceAccountName` is `serviceAccount: default` with its Job name as
+  `name`, a name no other workload of the namespace uses; the namespace
+  default ServiceAccount is accepted only there). Its pods reach DNS and
+  their service's Aurora only (no istiod, VPC endpoints, east-west or
+  ingress), and never a mesh service (STRICT mTLS). Every service namespace
+  already has such a Job and excludes `component=db-migration` from its
+  other policies by component alone, so the rule is all or nothing per
+  namespace (`checkSidecarLessJobComponents`): a meshed (native sidecar)
+  `db-migration` Job there is refused when it is added to the contract, and
+  left out of it, its pod gets no istiod egress: the proxy never gets ready
+  (`holdApplicationUntilProxyStarts`), Flyway never starts and the hook
+  fails at the Job's deadline. Running one meshed takes a ServiceAccount of
+  its own for the Job (a hook ServiceAccount in the chart, never the
+  namespace `default`) and every other `db-migration` Job of the namespace
+  meshed with it; see
+  [the baseline](docs/mesh/DEPLOYABLE_MESH_BASELINE.md#database-migration-jobs-proposed);
 - reference secrets through ClusterSecretStore `aws-secrets-manager`
   (`platform-secrets` is not valid), label each ExternalSecret
   `app.kubernetes.io/name=<sa>` and read only keys `<env>/<sa>/...`

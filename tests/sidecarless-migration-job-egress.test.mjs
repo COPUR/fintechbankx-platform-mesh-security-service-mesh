@@ -467,3 +467,48 @@ test('renderer refuses a namespace mixing sidecar-less and meshed Jobs of one co
   const checkPod = { 'app.kubernetes.io/name': 'open-products-catalog-service', 'app.kubernetes.io/component': 'history-guard-check' };
   assert.deepEqual(egressOf(ofMixed, 'open-finance', checkPod), ['allow-egress-aurora', 'allow-egress-dns', 'default-deny-all']);
 });
+
+// Every service namespace with an Aurora service now has a sidecar-less
+// db-migration Job, and its policies exclude that component, so in each one a
+// meshed (native sidecar) db-migration Job is refused when it is modelled and,
+// left out of the contract, its pod gets no istiod egress: its proxy never
+// gets ready (holdApplicationUntilProxyStarts), so Flyway never starts and the
+// hook fails at the Job's deadline. The README tells service
+// charts to run the Job without a sidecar and names the per-namespace rule;
+// it must not offer the native sidecar as the default.
+test('a meshed db-migration Job is refused in every service namespace, and the README says so', () => {
+  const withAurora = serviceWorkloads(contract).filter((w) => (w.datastores || []).includes('aurora-postgresql'));
+  const namespaces = [...new Set(withAurora.map((w) => w.ns))].sort();
+  assert.deepEqual(namespaces, ['compliance', 'customer', 'lending', 'open-finance', 'payments', 'risk']);
+  for (const ns of namespaces) {
+    const jobs = contract.namespaces.find((n) => n.name === ns).workloads.filter((w) => w.role === 'db-migration');
+    assert.ok(jobs.length && jobs.every((w) => w.sidecar === false), `${ns}: every db-migration Job is sidecar-less`);
+    for (const svc of withAurora.filter((w) => w.ns === ns)) {
+      // A chart's meshed migration Job pod, not in the contract.
+      const pod = {
+        'app.kubernetes.io/name': svc.serviceAccount,
+        'app.kubernetes.io/instance': 'ci',
+        'app.kubernetes.io/component': 'db-migration',
+        'sidecar.istio.io/inject': 'true',
+      };
+      assert.ok(!names(selecting(netpols, ns, pod, 'Egress')).includes('allow-egress-istiod'), `${ns}/${svc.serviceAccount}: meshed Job pod reaches istiod`);
+      // The same Job modelled as a meshed workload on a ServiceAccount of its own.
+      const c = structuredClone(contract);
+      c.namespaces.find((n) => n.name === ns).workloads.push({
+        serviceAccount: `${svc.serviceAccount}-db-migration-meshed`,
+        role: 'db-migration',
+        migrates: svc.serviceAccount,
+        sourceRepo: svc.sourceRepo,
+        selector: { 'app.kubernetes.io/name': svc.serviceAccount, 'app.kubernetes.io/component': 'db-migration' },
+        service: null,
+        destinationRule: false,
+        datastores: ['aurora-postgresql'],
+      });
+      assert.throws(() => render(c), new RegExp(`${ns}/${svc.serviceAccount}-db-migration-meshed: shares component db-migration`));
+    }
+  }
+  const readme = readFileSync(join(repoRoot, 'README.md'), 'utf8').replace(/\s+/g, ' ');
+  assert.doesNotMatch(readme, /migration Job[^;]*\bwith the sidecar\b[^;]*\bthe default\b/i, 'README offers the native sidecar as the default');
+  const bullet = readme.slice(readme.indexOf('Flyway migration Job'));
+  assert.match(bullet.slice(0, bullet.indexOf('- reference secrets')), /without a sidecar.*checkSidecarLessJobComponents/);
+});
