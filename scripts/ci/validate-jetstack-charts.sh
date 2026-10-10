@@ -4,9 +4,13 @@
 # the verified archives with the committed values and kubeconform them.
 # Run by scripts/ci/validate-manifests.sh; never applies anything.
 #
+# A committed sha256 that does not match fails the run. While a digest is still
+# the PLACEHOLDER, the archive is pulled, rendered and validated anyway, its
+# sha256 is printed as "CHART_DIGEST <archive> <sha256>" (the source for the
+# operator who fills CHART_DIGESTS) and the run passes with a warning; only
+# scripts/istio/install-mesh.sh --apply refuses a placeholder.
 # JETSTACK_CHARTS=skip (only where charts.jetstack.io is unreachable; CI never
 # sets it) checks the digest file's entries but pulls and validates nothing.
-# Fails closed: a missing or PLACEHOLDER digest fails the run unless skipped.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -30,7 +34,7 @@ if [ "$JETSTACK_CHARTS" = "skip" ]; then
   echo "JETSTACK_CHARTS=skip: cert-manager and trust-manager charts NOT pulled, verified or validated" >&2
   exit 0
 fi
-check_chart_digests_file "$DIGESTS" 0 "$CM_CHART" "$TM_CHART"
+check_chart_digests_file "$DIGESTS" 1 "$CM_CHART" "$TM_CHART"
 
 kubeconform_run() {
   "$KUBECONFORM" -strict -summary -kubernetes-version "$K8S_VERSION" \
@@ -44,9 +48,10 @@ if [ ! -f "$CHARTS/$CM_CHART" ] || [ ! -f "$CHARTS/$TM_CHART" ]; then
   "$HELM" pull jetstack/cert-manager --version "$CERT_MANAGER_VERSION" -d "$CHARTS"
   "$HELM" pull jetstack/trust-manager --version "$TRUST_MANAGER_VERSION" -d "$CHARTS"
 fi
-# Cached or freshly pulled: nothing renders an archive that does not match.
-verify_chart_archive "$DIGESTS" "$CHARTS/$CM_CHART"
-verify_chart_archive "$DIGESTS" "$CHARTS/$TM_CHART"
+# Cached or freshly pulled: nothing renders an archive that does not match its
+# committed sha256; a PLACEHOLDER archive is rendered and its digest printed.
+verify_or_report_chart_archive "$DIGESTS" "$CHARTS/$CM_CHART"
+verify_or_report_chart_archive "$DIGESTS" "$CHARTS/$TM_CHART"
 
 P="$ROOT/deploy/cert-manager/helm"
 # Chart values schemas reject unknown keys in the committed values files.

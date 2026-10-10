@@ -67,6 +67,39 @@ sha256_check() {
   fi
 }
 
+# sha256_of <file>: prints the file's sha256 (64 lower-case hex).
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{ print $1 }'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{ print $1 }'
+  else
+    echo "chart digests: neither sha256sum nor shasum is installed" >&2
+    return 1
+  fi
+}
+
+# verify_or_report_chart_archive <digests-file> <archive-path>
+# CI only. A committed sha256 must match (mismatch fails). A PLACEHOLDER is
+# reported instead: one greppable line "CHART_DIGEST <archive> <sha256>" that
+# an operator copies into the digests file after a second, independent pull.
+verify_or_report_chart_archive() {
+  local file="$1" archive="$2" name digest actual
+  name="$(basename "$archive")"
+  digest="$(chart_digest_entry "$file" "$name")" || {
+    echo "chart digests: $file needs exactly one line for $name" >&2
+    return 1
+  }
+  if [ "$digest" != "$CHART_DIGEST_PLACEHOLDER" ]; then
+    verify_chart_archive "$file" "$archive"
+    return
+  fi
+  [ -f "$archive" ] || { echo "chart digests: $archive not found" >&2; return 1; }
+  actual="$(sha256_of "$archive")" || return 1
+  echo "CHART_DIGEST $name $actual"
+  echo "chart digests: WARNING $name is NOT verified ($CHART_DIGEST_PLACEHOLDER in $file); after a second, independent pull agrees, commit: $actual  $name" >&2
+}
+
 # verify_chart_archive <digests-file> <archive-path>
 # The downloaded archive must match its committed sha256 before anything uses it.
 verify_chart_archive() {

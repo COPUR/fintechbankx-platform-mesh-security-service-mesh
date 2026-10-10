@@ -283,15 +283,19 @@ holds the expected sha256 of `cert-manager-<version>.tgz` and
 fresh temporary directory, verifies them, and installs from the verified local
 files, never from a repository reference. `scripts/ci/validate-jetstack-charts.sh`
 (called by `validate-manifests.sh`) verifies the archives the same way before
-`helm template`; `JETSTACK_CHARTS=skip` checks only that the file names both
-archives.
+`helm template`, and a committed digest that does not match fails CI;
+`JETSTACK_CHARTS=skip` checks only that the file names both archives.
 
 **The digests are not known yet.** The file holds a marked `PLACEHOLDER` for
 both archives: the authoring session could not reach `charts.jetstack.io`,
 `quay.io/jetstack` (OCI) or a GitHub release asset, so it could not hash the
-published archives. Until an operator fills both lines from two independent
-pulls on a trusted network (steps in the file), `install-mesh.sh --apply` and
-the CI step `validate-manifests.sh` fail closed. A version bump must change the
+published archives. Until an operator fills both lines, `install-mesh.sh
+--apply` fails closed. CI does not go red on the placeholder: it still pulls,
+renders and validates both charts, warns that they are NOT verified, and prints
+`CHART_DIGEST <archive> <sha256>` for each (`grep '^CHART_DIGEST '` in the
+validate-manifests log). The operator, or the platform thread reading that
+log, copies the values into the file after a second, independent pull on a
+trusted network agrees (steps in the file). A version bump must change the
 digest lines in the same commit (`tests/platform-pki-install.test.mjs` checks
 the names against the version files).
 

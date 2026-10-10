@@ -7,16 +7,19 @@
 # scripts/istio/install-mesh.sh pulls both archives, checks them against these
 # lines (sha256sum -c) and installs from the verified local files only.
 # scripts/ci/validate-jetstack-charts.sh (run by validate-manifests.sh in CI)
-# does the same before helm template.
+# verifies them the same way before helm template; a mismatch fails CI.
 #
 # PLACEHOLDER - NOT A DIGEST. The session that added this file could not reach
 # charts.jetstack.io, quay.io/jetstack (OCI) or a GitHub release asset, so it
 # could not hash the published archives. Until an operator replaces both
-# PLACEHOLDER values, install-mesh.sh --apply and CI fail closed (plan mode and
-# JETSTACK_CHARTS=skip only warn).
+# PLACEHOLDER values, install-mesh.sh --apply fails closed. CI still pulls,
+# renders and validates the charts, passes with a warning and prints each
+# archive's sha256 as a line "CHART_DIGEST <archive> <sha256>" in the
+# validate-manifests log.
 #
-# To fill, on a trusted network, with two independent pulls (different machine
-# or network) that must agree:
+# To fill: take the CHART_DIGEST lines from a CI run (or the platform thread's
+# reading of it) and confirm them with a second, independent pull on a trusted
+# network (different machine or network) - both must agree:
 #   helm repo add jetstack https://charts.jetstack.io --force-update
 #   helm pull jetstack/cert-manager --version v1.19.6 -d ./charts
 #   helm pull jetstack/trust-manager --version v0.20.3 -d ./charts

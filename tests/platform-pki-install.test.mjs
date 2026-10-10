@@ -187,9 +187,10 @@ test('CHART_DIGESTS names exactly the pinned archives, each with a sha256 or the
     assert.ok(SHA256.test(digest) || digest === 'PLACEHOLDER', `${name}: ${digest}`);
   }
   if (lines.some(([d]) => d === 'PLACEHOLDER')) {
-    // A placeholder must say so: install --apply and CI fail closed until an operator fills it.
+    // A placeholder must say so: install --apply refuses it; CI prints the digests to fill it from.
     assert.match(text, /PLACEHOLDER - NOT A DIGEST/);
-    assert.match(text, /fail closed/);
+    assert.match(text, /install-mesh\.sh --apply fails closed/);
+    assert.match(text, /CHART_DIGEST <archive> <sha256>/);
   }
 });
 
@@ -231,7 +232,7 @@ function sandbox(digests) {
       encoding: 'utf8',
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STUB_LOG: log, ...env },
     });
-    return { status: r.status, stderr: r.stderr, calls: readFileSync(log, 'utf8').split('\n').filter(Boolean) };
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr, calls: readFileSync(log, 'utf8').split('\n').filter(Boolean) };
   };
   return { dir, runScript, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
@@ -285,7 +286,7 @@ test('install-mesh --apply stops on a tampered archive before installing either 
   }
 });
 
-test('validate-jetstack-charts fails closed on a PLACEHOLDER or tampered archive, renders verified ones', () => {
+test('validate-jetstack-charts: a PLACEHOLDER renders, prints CHART_DIGEST and passes; a mismatch fails', () => {
   const run = (digests, env = {}) => {
     const sb = sandbox(digests);
     try {
@@ -294,19 +295,46 @@ test('validate-jetstack-charts fails closed on a PLACEHOLDER or tampered archive
       sb.cleanup();
     }
   };
+  const templates = (r) => r.calls.filter((c) => c.startsWith('helm template')).length;
+  const printed = (r) => r.stdout.split('\n').filter((l) => l.startsWith('CHART_DIGEST '));
+  const stubDigest = (i) =>
+    sha256(i === 0 ? stubArchive('cert-manager', CERT_MANAGER_VERSION) : stubArchive('trust-manager', TRUST_MANAGER_VERSION));
+
+  // Placeholder: pulled, rendered and validated; each archive's sha256 printed; warning, exit 0.
   const placeholder = run(placeholderDigests);
-  assert.notEqual(placeholder.status, 0);
-  assert.deepEqual(placeholder.calls, [], 'nothing pulled or rendered without digests');
+  assert.equal(placeholder.status, 0, placeholder.stderr);
+  assert.equal(templates(placeholder), 2);
+  assert.ok(placeholder.calls.some((c) => c.startsWith('kubeconform ')));
+  assert.deepEqual(printed(placeholder), ARCHIVES.map((a, i) => `CHART_DIGEST ${a} ${stubDigest(i)}`));
+  assert.match(placeholder.stderr, /WARNING cert-manager-v[\d.]+\.tgz is NOT verified/);
+  // The printed line is what an operator commits: it then verifies.
+  const filled = printed(placeholder).map((l) => `${l.split(' ')[2]}  ${l.split(' ')[1]}`).join('\n') + '\n';
+  const verified = run(filled);
+  assert.equal(verified.status, 0, verified.stderr);
+  assert.deepEqual(printed(verified), []);
+  assert.equal(templates(verified), 2);
+
+  // A committed digest that does not match fails before anything renders.
+  const tampered = run(goodDigests(), { STUB_TAMPER: 'trust-manager' });
+  assert.notEqual(tampered.status, 0);
+  assert.equal(templates(tampered), 0, tampered.calls.join('; '));
+  const wrong = run(`${'0'.repeat(64)}  ${ARCHIVES[0]}\nPLACEHOLDER  ${ARCHIVES[1]}\n`);
+  assert.notEqual(wrong.status, 0);
+  assert.equal(templates(wrong), 0);
+  assert.match(wrong.stderr, /cert-manager-v[\d.]+\.tgz does not match its sha256/);
+  // Mixed: the verified archive passes silently, the placeholder one is printed.
+  const mixed = run(`${stubDigest(0)}  ${ARCHIVES[0]}\nPLACEHOLDER  ${ARCHIVES[1]}\n`);
+  assert.equal(mixed.status, 0, mixed.stderr);
+  assert.deepEqual(printed(mixed), [`CHART_DIGEST ${ARCHIVES[1]} ${stubDigest(1)}`]);
+
   const skipped = run(placeholderDigests, { JETSTACK_CHARTS: 'skip' });
   assert.equal(skipped.status, 0);
   assert.match(skipped.stderr, /NOT verified/);
-  const tampered = run(goodDigests(), { STUB_TAMPER: 'trust-manager' });
-  assert.notEqual(tampered.status, 0);
-  assert.ok(!tampered.calls.some((c) => c.startsWith('helm template')), tampered.calls.join('; '));
-  const good = run(goodDigests());
-  assert.equal(good.status, 0, good.stderr);
-  assert.equal(good.calls.filter((c) => c.startsWith('helm template')).length, 2);
-  // A missing entry or a stray extra line is an error even when skipped.
-  assert.notEqual(run(`PLACEHOLDER  ${ARCHIVES[0]}\n`, { JETSTACK_CHARTS: 'skip' }).status, 0);
-  assert.notEqual(run(`${placeholderDigests}PLACEHOLDER  cert-manager-v0.0.1.tgz\n`, { JETSTACK_CHARTS: 'skip' }).status, 0);
+  assert.deepEqual(skipped.calls, []);
+  // A missing entry, a stray extra line or a malformed digest is an error, skipped or not.
+  for (const env of [{}, { JETSTACK_CHARTS: 'skip' }]) {
+    assert.notEqual(run(`PLACEHOLDER  ${ARCHIVES[0]}\n`, env).status, 0);
+    assert.notEqual(run(`${placeholderDigests}PLACEHOLDER  cert-manager-v0.0.1.tgz\n`, env).status, 0);
+    assert.notEqual(run(`TODO  ${ARCHIVES[0]}\nPLACEHOLDER  ${ARCHIVES[1]}\n`, env).status, 0);
+  }
 });
