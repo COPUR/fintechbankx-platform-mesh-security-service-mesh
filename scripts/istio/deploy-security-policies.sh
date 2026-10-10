@@ -1,4 +1,9 @@
 #!/bin/bash
+# DEPRECATED (monolith extraction seed): references monorepo-only files under
+# k8s/istio/*.yaml and the single 'banking' namespace. Use
+# scripts/istio/install-mesh.sh with deploy/ instead. Kept for history only.
+# It no longer installs cert-manager from a remote URL (see
+# install_cert_manager); install-mesh.sh owns cert-manager and trust-manager.
 
 # Enterprise Banking Istio Security Policies Deployment Script
 # mTLS, RBAC, and Network Policies for Banking Compliance
@@ -93,20 +98,13 @@ validate_prerequisites() {
     log "Prerequisites validation completed successfully"
 }
 
-# Install cert-manager if not present
+# cert-manager is not installed here any more. This function used to apply
+# cert-manager v1.13.3 straight from a remote release URL (content neither
+# pinned nor reviewable offline). scripts/istio/install-mesh.sh installs
+# cert-manager and trust-manager from pinned jetstack Helm charts with the
+# values in deploy/cert-manager/helm/, followed by the platform PKI.
 install_cert_manager() {
-    log "Installing cert-manager..."
-    
-    # Install cert-manager
-    kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.3/cert-manager.yaml
-    
-    # Wait for cert-manager to be ready
-    info "Waiting for cert-manager to be ready..."
-    kubectl wait --for=condition=available --timeout=300s deployment/cert-manager -n cert-manager
-    kubectl wait --for=condition=available --timeout=300s deployment/cert-manager-webhook -n cert-manager
-    kubectl wait --for=condition=available --timeout=300s deployment/cert-manager-cainjector -n cert-manager
-    
-    log "cert-manager installed successfully"
+    error "cert-manager is not installed. Run scripts/istio/install-mesh.sh <dev|staging|prod> --apply, which installs cert-manager and trust-manager from pinned Helm charts."
 }
 
 # Setup namespaces and labels
@@ -318,7 +316,7 @@ spec:
   serviceAccountName: loan-service
   containers:
   - name: test
-    image: curlimages/curl:latest
+    image: curlimages/curl:8.10.1
     command: ["sleep", "3600"]
 EOF
 
@@ -334,7 +332,7 @@ metadata:
 spec:
   containers:
   - name: test
-    image: curlimages/curl:latest
+    image: curlimages/curl:8.10.1
     command: ["sleep", "3600"]
 EOF
 

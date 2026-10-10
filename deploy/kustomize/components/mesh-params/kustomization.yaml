@@ -1,0 +1,105 @@
+# Substitutes the per-environment parameters (ConfigMap mesh-params, generated
+# by each overlay and dropped from the output as local config) into the base.
+# The k8s/platform resources (ClusterSecretStores, platform ESO service
+# account, internal CA ExternalSecret) are substituted by
+# components/platform-params, which the pre-Istio platform-pki overlays reuse.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+replacements:
+  # Identity host -> issuer, JWKS, egress ServiceEntry, gateway hosts.
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.IDENTITY_HOST}
+    targets:
+      - select: {kind: RequestAuthentication}
+        fieldPaths: [spec.jwtRules.0.issuer, spec.jwtRules.0.jwksUri]
+        options: {delimiter: /, index: 2}
+      - select: {kind: ServiceEntry, name: identity-external}
+        fieldPaths: [spec.hosts.0]
+      - select: {kind: DestinationRule, name: identity-external}
+        fieldPaths: [spec.host]
+      - select: {kind: Gateway, name: fintechbankx-public}
+        fieldPaths: [spec.servers.0.hosts.1, spec.servers.1.hosts.1]
+      - select: {kind: VirtualService, name: fintechbankx-identity}
+        fieldPaths: [spec.hosts.0, "spec.http.*.headers.request.set.x-forwarded-host"]
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.API_HOST}
+    targets:
+      - select: {kind: Gateway, name: fintechbankx-public}
+        fieldPaths: [spec.servers.0.hosts.0, spec.servers.1.hosts.0]
+      - select: {kind: VirtualService, name: fintechbankx-api}
+        fieldPaths: [spec.hosts.0, "spec.http.*.headers.request.set.x-forwarded-host"]
+  # Monolith host behind the strangler cut-over routes (gateway.legacyBackends).
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.LEGACY_OPEN_FINANCE_HOST}
+    targets:
+      - select: {kind: ServiceEntry, name: legacy-open-finance}
+        fieldPaths: [spec.hosts.0]
+      - select: {kind: DestinationRule, name: legacy-open-finance}
+        fieldPaths: [spec.host, spec.trafficPolicy.portLevelSettings.0.tls.sni, spec.trafficPolicy.portLevelSettings.0.tls.subjectAltNames.0]
+      - select: {kind: VirtualService, name: fintechbankx-api}
+        fieldPaths:
+          - "spec.http.[name=rtp-cutover-r2].route.0.destination.host"
+          - "spec.http.[name=rtp-cutover-r4].route.0.destination.host"
+  # CIDRs -> NetworkPolicy ipBlocks and the Aurora ServiceEntry address.
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.VPC_CIDR}
+    targets:
+      - select: {kind: NetworkPolicy, name: allow-egress-vpc-https}
+        fieldPaths: [spec.egress.0.to.0.ipBlock.cidr]
+      - select: {kind: NetworkPolicy, name: allow-ingress-node-health}
+        fieldPaths: [spec.ingress.0.from.0.ipBlock.cidr]
+      - select: {kind: NetworkPolicy, name: allow-egress-prometheus-nodes}
+        fieldPaths: [spec.egress.0.to.0.ipBlock.cidr]
+      - select: {kind: NetworkPolicy, name: allow-ingress-operator-webhook}
+        fieldPaths: [spec.ingress.0.from.0.ipBlock.cidr]
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.AURORA_CIDR}
+    targets:
+      - select: {kind: NetworkPolicy, name: allow-egress-aurora}
+        fieldPaths: [spec.egress.0.to.0.ipBlock.cidr]
+      - select: {kind: ServiceEntry, name: aurora-postgresql}
+        fieldPaths: [spec.addresses.0]
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.MSK_CIDR}
+    targets:
+      - select: {kind: NetworkPolicy, name: allow-egress-msk}
+        fieldPaths: [spec.egress.0.to.0.ipBlock.cidr]
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.DOCDB_CIDR}
+    targets:
+      - select: {kind: NetworkPolicy, name: allow-egress-documentdb}
+        fieldPaths: [spec.egress.0.to.0.ipBlock.cidr]
+      - select: {kind: ServiceEntry, name: documentdb}
+        fieldPaths: [spec.addresses.0]
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.REDIS_CIDR}
+    targets:
+      - select: {kind: NetworkPolicy, name: allow-egress-redis}
+        fieldPaths: [spec.egress.0.to.0.ipBlock.cidr]
+      - select: {kind: ServiceEntry, name: elasticache-redis}
+        fieldPaths: [spec.addresses.0]
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.INGRESS_SOURCE_CIDR}
+    targets:
+      - select: {kind: NetworkPolicy, name: allow-ingress-load-balancer}
+        fieldPaths: [spec.ingress.0.from.0.ipBlock.cidr]
+  # Region -> AWS API / MSK hostnames and the ClusterSecretStore.
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.AWS_REGION}
+    targets:
+      - select: {kind: ServiceEntry, name: aws-apis}
+        fieldPaths: [spec.hosts.0, spec.hosts.1, spec.hosts.2]
+        options: {delimiter: ., index: 1}
+      - select: {kind: ServiceEntry, name: msk-brokers}
+        fieldPaths: [spec.hosts.0]
+        options: {delimiter: ., index: 2}
+      - select: {kind: ServiceEntry, name: aws-observability-apis}
+        fieldPaths: [spec.hosts.0, spec.hosts.1, spec.hosts.2]
+        options: {delimiter: ., index: 1}
+      - select: {kind: ServiceEntry, name: aws-s3}
+        fieldPaths: [spec.hosts.0]
+        options: {delimiter: ., index: 1}
+      - select: {kind: ServiceEntry, name: aws-s3}
+        fieldPaths: [spec.hosts.1]
+        options: {delimiter: ., index: 2}
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.ENVIRONMENT}
+    targets:
+      - select: {kind: ExternalSecret, name: fintechbankx-ingress-tls}
+        fieldPaths: [spec.data.0.remoteRef.key, spec.data.1.remoteRef.key]
+        options: {delimiter: /, index: 0}
+      # Environment segment the ExternalSecret admission policy requires on
+      # every remote key: the CEL literal 'ENVIRONMENT' -> 'dev' | 'staging' | 'prod'.
+      - select: {kind: ValidatingAdmissionPolicy, name: fintechbankx-externalsecret-scope}
+        fieldPaths: ["spec.variables.[name=env].expression"]
+        options: {delimiter: "'", index: 1}

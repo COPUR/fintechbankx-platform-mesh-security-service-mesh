@@ -52,6 +52,134 @@ Bu repository, FinTechBankX DDD/EDA dönüşümünde **svc-msh-security** servis
 - [Capability Map (PUML)](https://github.com/COPUR/fintechbankx-governance-architecture-enablement-enterprise-architecture/blob/main/docs/puml/service-mesh/enterprise-capability-map.puml)
 - [Bu Repo Dokümantasyonu](./docs)
 
+## Deployable mesh baseline (Proposed)
+
+This repository provides the Istio service mesh and zero-trust network layer
+for every FinTechBankX bounded context. It contains platform infrastructure
+only, no domain logic. Status: **Proposed**; validated locally (render,
+schema, policy checks), never applied to a cluster.
+
+| Path | What it is |
+|---|---|
+| [contracts/mesh-contract.yaml](contracts/mesh-contract.yaml) | Source of truth: namespaces, service accounts, call edges, exceptions, gaps |
+| [deploy/istio](deploy/istio) | Istio 1.24.3 Helm values (base, istiod HA, ingress gateway behind AWS NLB), per-env overrides |
+| [deploy/kustomize](deploy/kustomize) | Base (generated policies) + overlays `dev`, `staging`, `prod` with `params.env` |
+| [k8s/platform/external-secrets](k8s/platform/external-secrets) | ClusterSecretStores `aws-secrets-manager` (service namespaces and `observability`, ESO SA `external-secrets`) and `aws-secrets-manager-platform` (`cert-manager`, `istio-ingress`, `identity` only, ESO SA `external-secrets-platform`), each with its own IRSA role |
+| [k8s/platform/cert-manager](k8s/platform/cert-manager) | ClusterIssuer and trust-manager Bundle `fintechbankx-internal-ca` (key pair from Secrets Manager `<env>/platform/internal-ca`); Bundle `rds-ca-bundle` (Amazon RDS / DocumentDB CA) |
+| [deploy/cert-manager](deploy/cert-manager) | Pinned jetstack chart versions (`CERT_MANAGER_VERSION`, `TRUST_MANAGER_VERSION`), the expected sha256 of each chart archive (`CHART_DIGESTS`, taken from two CI pulls of the published archives that agree, Mesh Manifests run 38049446800 attempts 1 and 2 on 2026-10-10; `install-mesh.sh --apply` and CI install or render only archives that match) and the committed Helm values for cert-manager and trust-manager |
+| [deploy/kustomize/platform-pki](deploy/kustomize/platform-pki) | Per-env platform PKI (issuer, bundles, their sources and stores) applied before Istio; renders identically inside the mesh overlay |
+| [deploy/kustomize/components/corporate-directory](deploy/kustomize/components/corporate-directory) | prod only: Bundle `corporate-directory-ca` and Keycloak LDAPS egress |
+| [scripts/generate](scripts/generate) | Renders `deploy/kustomize/base/generated/*.yaml` from the contract |
+| [scripts/validation](scripts/validation) | `npm run validate:strict-mtls` (rules R1-R12) |
+| [scripts/ci/validate-manifests.sh](scripts/ci/validate-manifests.sh) | kustomize build, kubeconform with Istio/ESO CRD schemas, istioctl analyze, helm template |
+| [scripts/istio/install-mesh.sh](scripts/istio/install-mesh.sh) | Install order: cert-manager, trust-manager, platform PKI, Istio, mesh policies, gateway (prints a plan unless `--apply`) |
+| [docs/mesh/DEPLOYABLE_MESH_BASELINE.md](docs/mesh/DEPLOYABLE_MESH_BASELINE.md) | Call graph, gaps, resilience mapping, exceptions, drift fixed |
+
+What it enforces: mesh-wide STRICT mTLS (`PeerAuthentication default` in
+`istio-system`, no PERMISSIVE/DISABLE anywhere), `default-deny`
+AuthorizationPolicy and NetworkPolicy per namespace, ALLOW rules per caller
+SPIFFE principal `cluster.local/ns/<ns>/sa/<sa>` for each real call edge,
+Keycloak JWT validation (issuer at the gateway; issuer + `aud` = service id per
+workload), a JWT required on `/api/**`, `outboundTrafficPolicy: REGISTRY_ONLY`
+with ServiceEntries for Aurora, MSK, AWS APIs and the identity host,
+DestinationRules with connection pools, outlier detection and locality-aware
+load balancing.
+
+### Platform PKI: who installs cert-manager and trust-manager
+
+This repository does. `scripts/istio/install-mesh.sh` installs, in order and
+waiting for each step: cert-manager (jetstack chart, version in
+[deploy/cert-manager/CERT_MANAGER_VERSION](deploy/cert-manager/CERT_MANAGER_VERSION)),
+trust-manager (version in
+[deploy/cert-manager/TRUST_MANAGER_VERSION](deploy/cert-manager/TRUST_MANAGER_VERSION),
+trust namespace `cert-manager`, ConfigMap targets only), then the platform PKI
+(ClusterIssuer `fintechbankx-internal-ca`, Bundles `rds-ca-bundle` and
+`fintechbankx-internal-ca`), then Istio and the mesh policies. Both charts
+install their CRDs. The External Secrets Operator (CRDs and controller) must
+already be installed. Details: [docs/mesh/DEPLOYABLE_MESH_BASELINE.md](docs/mesh/DEPLOYABLE_MESH_BASELINE.md).
+
+Service charts must not install cert-manager, trust-manager or their CRDs.
+They assume ConfigMap `rds-ca-bundle` (key `global-bundle.pem`) already exists
+in their namespace and that ClusterIssuer `fintechbankx-internal-ca` exists.
+
+### How a service consumes the mesh
+
+A service chart must (platform contract addendum, 2026-10-08):
+
+- install into its context namespace (`lending`, `payments`, `customer`,
+  `risk`, `compliance`, `open-finance`); these and `identity`,
+  `observability` are injected. `istio-system`, `kube-system`,
+  `external-secrets` and `kafka` are not;
+- use the service account named in the contract (= chart name), with pod labels
+  `app.kubernetes.io/name=<sa>`, `app=<sa>`, `version=<semver or sha>`,
+  `fintechbankx.io/service-id=<service id>`, `sidecar.istio.io/inject: "true"`;
+- name Service ports `http` (8080) and `http-management` (8081) so Istio
+  detects the protocol; serve `/actuator/health/{liveness,readiness}` and
+  `/actuator/prometheus` on 8081;
+- not set `traffic.sidecar.istio.io/excludeInboundPorts` (probes use Istio's
+  probe rewrite) and not ship a PeerAuthentication or DestinationRule that
+  weakens mTLS;
+- may set `traffic.sidecar.istio.io/excludeOutboundPorts` only for datastore
+  and broker ports that carry their own TLS (5432 Aurora with `verify-full`,
+  27017 DocumentDB, 6379 Redis with TLS, 9093 Strimzi mutual TLS); the
+  workload's egress NetworkPolicy still limits where those ports go;
+- run its Flyway migration Job without a sidecar
+  (`sidecar.istio.io/inject: "false"` on the pod), as every service chart
+  does today, with pods labelled `app.kubernetes.io/name=<sa>` (Aurora
+  egress) and `app.kubernetes.io/component=db-migration` (never MSK), and
+  list it in the contract as a `role: db-migration` workload with `sidecar:
+  false` and an `exceptions.workloadInjection` entry (a Job without
+  `serviceAccountName` is `serviceAccount: default` with its Job name as
+  `name`, a name no other workload of the namespace uses; the namespace
+  default ServiceAccount is accepted only there). Its pods reach DNS and
+  their service's Aurora only (no istiod, VPC endpoints, east-west or
+  ingress), and never a mesh service (STRICT mTLS). Every service namespace
+  already has such a Job and excludes `component=db-migration` from its
+  other policies by component alone, so the rule is all or nothing per
+  namespace (`checkSidecarLessJobComponents`): a meshed (native sidecar)
+  `db-migration` Job there is refused when it is added to the contract, and
+  left out of it, its pod gets no istiod egress: the proxy never gets ready
+  (`holdApplicationUntilProxyStarts`), Flyway never starts and the hook
+  fails at the Job's deadline. Running one meshed takes a ServiceAccount of
+  its own for the Job (a hook ServiceAccount in the chart, never the
+  namespace `default`) and every other `db-migration` Job of the namespace
+  meshed with it; see
+  [the baseline](docs/mesh/DEPLOYABLE_MESH_BASELINE.md#database-migration-jobs-proposed);
+- reference secrets through ClusterSecretStore `aws-secrets-manager`
+  (`platform-secrets` is not valid), label each ExternalSecret
+  `app.kubernetes.io/name=<sa>` and read only keys `<env>/<sa>/...`
+  (`spec.data[].remoteRef.key` or `spec.dataFrom[].extract.key`; no
+  `dataFrom.find`, no `sourceRef`). The ValidatingAdmissionPolicy
+  `fintechbankx-externalsecret-scope` (generated, Kubernetes 1.30+) rejects
+  anything else in a service namespace; platform keys (`<env>/platform/*`,
+  `<env>/identity-keycloak/*`, `<env>/identity-openldap/*`) are only reachable through
+  `aws-secrets-manager-platform` from the platform namespaces;
+- validate JWT issuer `https://<identity-host>/realms/fintechbankx` and an
+  `aud` containing its own service id; send tokens in the `Authorization`
+  header (`Bearer ` or `DPoP `). The workload RequestAuthentication reads no
+  query parameter or cookie;
+- mount ConfigMap `rds-ca-bundle` (installed by the platform, see above) to
+  verify Aurora PostgreSQL and DocumentDB TLS instead of shipping its own copy.
+
+A new call edge is added to `contracts/mesh-contract.yaml` (with evidence),
+then `npm run generate`; the validator rejects principals that are not in the
+contract.
+
+### Validate locally
+
+```bash
+npm ci && npm test && npm run validate:strict-mtls
+bash scripts/ci/validate-manifests.sh   # needs kustomize, kubeconform, helm, istioctl
+# Without access to charts.jetstack.io: JETSTACK_CHARTS=skip (the
+# cert-manager / trust-manager charts are then NOT pulled, verified against
+# deploy/cert-manager/CHART_DIGESTS or validated; CI never skips).
+```
+
+Legacy material from the monolith extraction (`k8s/istio/security`,
+`k8s/istio/local`, `security/`, `scripts/istio/install-istio.sh`) uses a
+single `banking` namespace and is kept for reference; it is not part of the
+deployable set. `k8s/istio/local` remains the kind-based local sandbox.
+
 ## Güvenlik ve Uyumluluk Notları
 - Gerçek secret değerleri repo veya `.env` içinde tutulmaz.
 - Secret üretim/rotasyon olayları merkezi log/SIEM'e taşınır.
@@ -60,13 +188,6 @@ Bu repository, FinTechBankX DDD/EDA dönüşümünde **svc-msh-security** servis
 ## Katkı
 - Katkı süreci için `CONTRIBUTING.md` ve squad runbook'ları izlenmelidir.
 - PR'larda mimari kararlar ADR veya backlog referansı ile ilişkilendirilmelidir.
-
-## Cell-Based Architecture
-
-This repository participates in the FinTechBankX cell-based resilience program.
-
-- Plan: \
-- Backlog: \
 
 <!-- cell-architecture-start -->
 ## Cell-Based Architecture

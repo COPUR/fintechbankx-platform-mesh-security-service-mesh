@@ -1,0 +1,35 @@
+# Keycloak -> corporate directory, LDAPS 636 (LDAP_CONNECTION_URL in the
+# identity repo prod overlay). TLS is end to end between Keycloak and the
+# directory; the sidecar passes it through by SNI host.
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: corporate-directory
+  namespace: identity
+spec:
+  exportTo: ["."]
+  location: MESH_EXTERNAL
+  hosts: [DIRECTORY_HOST]
+  ports:
+    - number: 636
+      name: tls-ldaps
+      protocol: TLS
+  resolution: DNS
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-corporate-directory
+  namespace: identity
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 192.0.2.0/24
+      ports:
+        - protocol: TCP
+          port: 636

@@ -1,0 +1,1306 @@
+# FinTechBankX mesh contract (Proposed).
+#
+# Single source of truth for the mesh policies in deploy/kustomize/base.
+# scripts/generate/render-mesh-policies.mjs renders the base manifests from
+# this file and tests/ fail when the committed manifests drift from it.
+#
+# Aligned to the platform contract (platform pillar, 2026-10-08): one namespace
+# per bounded context, SA = Helm chart name, http 8080 / management 8081,
+# SPIFFE principal cluster.local/ns/<ns>/sa/<sa>, Keycloak realm fintechbankx.
+#
+# Call edges were read from the service repos (branch
+# claude/project-thread-ty79y4) - application.yml, Helm values and HTTP
+# adapters - not from target-state diagrams. Edges whose callee does not exist
+# yet are listed under `gaps` and are NOT allowed by any policy.
+
+istio:
+  version: 1.24.3
+  trustDomain: cluster.local
+
+ports:
+  http: 8080
+  management: 8081
+
+identity:
+  realm: fintechbankx
+  # Each workload's RequestAuthentication requires aud to contain its own
+  # service id (platform contract addendum); the gateway checks issuer only.
+  # Per-environment identity host comes from the overlay params (IDENTITY_HOST).
+  issuer: https://IDENTITY_HOST/realms/fintechbankx
+  jwksUri: https://IDENTITY_HOST/realms/fintechbankx/protocol/openid-connect/certs
+
+gateway:
+  namespace: istio-ingress
+  serviceAccount: istio-ingressgateway
+  selector:
+    istio: ingressgateway
+  # Container ports of the gateway Deployment (Helm chart istio/gateway 1.24.3).
+  containerPorts: [80, 443]
+  # Edge rate limit for the anonymous open-data APIs (platform review
+  # 2026-10-08). Envoy local rate limit per gateway pod, keyed on nothing
+  # (one bucket per route per pod, shared by every client), 429 when empty.
+  # Proposed values: tune from traffic; total = per-pod rate x gateway
+  # replicas (gatewayReplicas mirrors deploy/istio/helm autoscaling; tests
+  # fail when they drift).
+  # Not per client yet: Istio 1.24.3 ships Envoy 1.32, whose local rate limit
+  # has no dynamic descriptors (max_dynamic_descriptors, Envoy 1.34 / Istio
+  # 1.26), and the NLB does not pass the client address to the gateway
+  # (preserve_client_ip off, no proxy protocol). Per-client limits need the
+  # Istio upgrade plus proxy protocol (or a global rate limit service).
+  anonymousRateLimit:
+    routes: [svc-of-open-products-catalog, svc-of-atm-directory, svc-of-banking-metadata]
+    maxTokens: 100
+    tokensPerFill: 50
+    fillInterval: 1s
+    gatewayReplicas:
+      dev: [2, 4]
+      staging: [3, 6]
+      prod: [3, 12]
+
+  # Token locations the gateway RequestAuthentication validates:
+  # Authorization "Bearer " and "DPoP " only. TPP tokens are DPoP-bound
+  # (RFC 9449) and the rtp-cutover cohort rule (R3) routes on the validated
+  # token's azp, which the gateway only sees for tokens it validated. No
+  # query parameter (Istio's default access_token): a token in the URL leaks
+  # into logs and caches and must never select a cohort route; nothing in
+  # this repo needs one. The list must stay explicit: with no location
+  # Istio falls back to its defaults, query access_token included (the
+  # renderer refuses both). Every workload RequestAuthentication uses the
+  # same header-only list (review 5478494656): workloads receive the token
+  # the gateway forwarded or a caller's Authorization header. The gateway
+  # still checks the issuer only; the DPoP proof is checked by the service.
+  tokenLocations:
+    fromHeaders:
+      - {name: Authorization, prefix: "Bearer "}
+      - {name: Authorization, prefix: "DPoP "}
+  # Backends outside this mesh that the gateway still routes to during a
+  # strangler cut-over. One explicit host each (placeholder replaced per
+  # overlay from mesh-params), HTTPS originated by the gateway with the host
+  # name verified; ServiceEntry and DestinationRule are visible to the
+  # gateway namespace only. Egress uses the gateway's existing VPC 443 rule.
+  legacyBackends:
+    legacy-open-finance:
+      host: LEGACY_OPEN_FINANCE_HOST
+      evidence: enterprise-loan-management-system open-finance-context (requesttopay package); its deployment target is not in any platform repo yet
+  # Strangler cut-overs at the gateway. Rules render as VirtualService routes
+  # in this order, ahead of every other API route; regexes are RE2 full
+  # matches on the path without query string (Envoy safe_regex), anchored,
+  # never prefixes. A rule with `cohort: true` matches only tokens whose
+  # cohort claim (validated by the gateway) is one of cohort.clients, one
+  # exact value per entry; with an empty cohort the rule is not rendered at
+  # all (an Istio route without match entries matches everything).
+  cutovers:
+    - name: rtp-cutover
+      evidence: >-
+        RUNBOOK-EXTRACT-pay-request-to-pay section 3 (request-to-pay PR #14
+        d6049d7): R1 CONS-RTP2- follow-ups always to this service, R2 other
+        ids to the monolith, R3 creates from the cohort, R4 other creates.
+      target: payments/payment-request-to-pay-service
+      legacy: legacy-open-finance
+      cohort:
+        name: rtp-cutover-cohort
+        claim: azp
+        # Runbook step 2: empty (no TPP moves). Step 3 adds pilot TPP client
+        # ids here, one literal id per entry; step 4 = every TPP.
+        clients: []
+      rules:
+        - id: R1
+          to: target
+          match:
+            - {method: GET, regex: "^/open-finance/v1/payment-consents/CONS-RTP2-[0-9a-f-]{36}$"}
+            - {method: POST, regex: "^/open-finance/v1/payment-consents/CONS-RTP2-[0-9a-f-]{36}/(accept|reject)$"}
+        - id: R2
+          to: legacy
+          match:
+            - {method: GET, regex: "^/open-finance/v1/payment-consents/[^/]+$"}
+            - {method: POST, regex: "^/open-finance/v1/payment-consents/[^/]+/(accept|reject)$"}
+        - id: R3
+          to: target
+          cohort: true
+          match:
+            - {method: POST, regex: "^/open-finance/v1/par$"}
+        - id: R4
+          to: legacy
+          match:
+            - {method: POST, regex: "^/open-finance/v1/par$"}
+
+# kind: service   -> bounded-context namespace with application workloads
+# kind: platform  -> platform namespace managed by a platform repo
+#
+# Workload keys: serviceAccount is the ServiceAccount the pods run as;
+# `serviceAccount: default` is the namespace default ServiceAccount (the pod
+# spec names none), allowed only on a sidecar-less Job with a `name` of its
+# own (the renderer refuses anything else: that account is shared by every
+# pod without one, so it is never an identity or principal). A workload's
+# reference <namespace>/<name> (name defaults to serviceAccount) belongs to
+# that workload alone: the renderer refuses a reference two workloads of a
+# namespace use, and validator R9 an exception that would cover both.
+namespaces:
+  - name: lending
+    context: lending
+    kind: service
+    workloads:
+      - serviceAccount: loan-lifecycle-service
+        serviceId: svc-ln-loan-lifecycle
+        sourceRepo: fintechbankx-lendingpayments-loan-lifecycle-core
+        apiPrefix: /api/v1/loans
+        datastores: [aurora-postgresql, msk]
+      # Flyway migration Job (Helm pre-install/pre-upgrade hook), loan
+      # 629444d: deploy/helm/loan-lifecycle-service/templates/migration-job.yaml:55-74
+      # (pod labels loan.baseLabels: app.kubernetes.io/name <service> and
+      # instance <release>; component db-migration, fintechbankx.io/squad, and
+      # sidecar.istio.io/inject label and annotation from
+      # values migration.istioSidecar, false in values.yaml:171-174). No
+      # serviceAccountName: the pod runs as the namespace default
+      # ServiceAccount with automountServiceAccountToken false (no token, no
+      # IAM role). It mounts the hook Secret <service>-db-migration
+      # (DB_MIGRATION_USERNAME/_PASSWORD, synced by ESO from
+      # <env>/loan-lifecycle-service/db-migration) and the rds-ca-bundle
+      # ConfigMap, and opens JDBC to DB_URL only: the "migrate" context
+      # configures the DataSource and Flyway, no Kafka, web, security or AWS
+      # client, and authenticates with that password (no IAM DB auth, no STS).
+      # Selector, sidecar opt-out and policy shape as the customer Job:
+      # DNS and the name-keyed Aurora egress only.
+      - serviceAccount: default
+        name: loan-lifecycle-service-db-migration
+        role: db-migration
+        migrates: loan-lifecycle-service
+        sourceRepo: fintechbankx-lendingpayments-loan-lifecycle-core
+        selector:
+          app.kubernetes.io/name: loan-lifecycle-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
+  - name: payments
+    context: payments
+    kind: service
+    workloads:
+      - serviceAccount: payment-initiation-settlement-service
+        serviceId: svc-pay-initiation-settlement
+        sourceRepo: fintechbankx-lendingpayments-payment-orchestration-initiation-settlement
+        apiPrefix: /api/v1/payments
+        datastores: [aurora-postgresql, msk]
+      # Request-to-pay, recurring mandates and bulk orchestration: each has its
+      # own Aurora PostgreSQL database and publishes through an outbox relay to
+      # MSK (evt.pay.rtp / evt.pay.mandate / evt.pay.bulk); review of RtP #14
+      # found the pods had no datastore egress (2026-10-08).
+      - serviceAccount: payment-request-to-pay-service
+        serviceId: svc-pay-request-to-pay
+        sourceRepo: fintechbankx-lendingpayments-payment-orchestration-request-to-pay
+        # TPP-facing, DPoP. No prefix route: the gateway routes its four exact
+        # operations through gateway.cutovers rtp-cutover (R1 to R4).
+        datastores: [aurora-postgresql, msk]
+      - serviceAccount: payment-recurring-mandates-service
+        serviceId: svc-pay-recurring-mandates
+        sourceRepo: fintechbankx-lendingpayments-payment-orchestration-recurring-mandates
+        apiPrefix: /open-finance/v1/vrp   # TPP-facing, DPoP enforced by the service (contract DPoP section)
+        datastores: [aurora-postgresql, msk]
+      - serviceAccount: payment-bulk-orchestration-service
+        serviceId: svc-pay-bulk-orchestration
+        sourceRepo: fintechbankx-lendingpayments-payment-orchestration-bulk-orchestration
+        apiPrefix: /open-finance/v1/file-payments   # TPP-facing, DPoP enforced by the service (contract DPoP section)
+        datastores: [aurora-postgresql, msk]
+      # Flyway migration Jobs of the four payments services (Helm
+      # pre-install/pre-upgrade hooks, templates/migration-job.yaml of each
+      # chart): initiation/settlement 9671414 :54-73, recurring mandates
+      # ceb45b5 :58-77, bulk orchestration fe1d583 :55-79, request to pay
+      # 2cd8e3c :57-77. Each pod carries app.kubernetes.io/name <service>,
+      # instance <release> and component db-migration, with
+      # sidecar.istio.io/inject "false" as label and annotation (request to
+      # pay hard-codes it; the other three take values migration.istioSidecar,
+      # false). Each runs as the namespace default ServiceAccount (no
+      # serviceAccountName) with automountServiceAccountToken false: no
+      # token, no IAM role (request to pay's IRSA role is on the API
+      # ServiceAccount only). Each mounts its hook Secret
+      # <service>-db-migration (owner credential from
+      # <env>/<service>/db-migration: DB_MIGRATION_USERNAME/_PASSWORD, bulk
+      # SPRING_FLYWAY_USER/_PASSWORD) and the rds-ca-bundle ConfigMap, and
+      # opens JDBC to DB_URL only (the "migrate" context configures the
+      # DataSource and Flyway, no Kafka, web, security or AWS client; password
+      # auth, no IAM DB auth, no STS). All four are sidecar-less, so the
+      # shared component db-migration is excluded from every other payments
+      # policy (checkSidecarLessJobComponents). Same selector and policy shape
+      # as the customer Job: DNS and the name-keyed Aurora egress only.
+      - serviceAccount: default
+        name: payment-initiation-settlement-service-db-migration
+        role: db-migration
+        migrates: payment-initiation-settlement-service
+        sourceRepo: fintechbankx-lendingpayments-payment-orchestration-initiation-settlement
+        selector:
+          app.kubernetes.io/name: payment-initiation-settlement-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
+      - serviceAccount: default
+        name: payment-request-to-pay-service-db-migration
+        role: db-migration
+        migrates: payment-request-to-pay-service
+        sourceRepo: fintechbankx-lendingpayments-payment-orchestration-request-to-pay
+        selector:
+          app.kubernetes.io/name: payment-request-to-pay-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
+      - serviceAccount: default
+        name: payment-recurring-mandates-service-db-migration
+        role: db-migration
+        migrates: payment-recurring-mandates-service
+        sourceRepo: fintechbankx-lendingpayments-payment-orchestration-recurring-mandates
+        selector:
+          app.kubernetes.io/name: payment-recurring-mandates-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
+      - serviceAccount: default
+        name: payment-bulk-orchestration-service-db-migration
+        role: db-migration
+        migrates: payment-bulk-orchestration-service
+        sourceRepo: fintechbankx-lendingpayments-payment-orchestration-bulk-orchestration
+        selector:
+          app.kubernetes.io/name: payment-bulk-orchestration-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
+  - name: customer
+    context: customer
+    kind: service
+    workloads:
+      - serviceAccount: customer-profile-kyc-service
+        serviceId: svc-cus-profile-kyc
+        sourceRepo: fintechbankx-customer-profile-kyc-core
+        apiPrefix: /api/v1/customers
+        datastores: [aurora-postgresql, msk]
+      # Flyway migration Job (Helm pre-install/pre-upgrade hook), branch
+      # claude/customer-risk-compliance-deployable-ygi0zo 90b88d8:
+      # deploy/helm/customer-profile-kyc-service/templates/migration-job.yaml:39-49,
+      # _helpers.tpl:39-47, values.yaml:21-25 (podLabels add app:
+      # customer-profile-kyc-service, part-of, service-id).
+      # Pod labels (the chart's migrationSelectorLabels): app.kubernetes.io/name
+      # <service>, instance <release>, component db-migration, plus podLabels
+      # without their inject key, then sidecar.istio.io/inject "false". Own
+      # ServiceAccount <service>-db-migration, no token, no IAM role. The
+      # instance label is the Helm release name, chosen per install, so the
+      # selector is name + component (the narrowest the labels allow). The
+      # mesh does not need the opt-out (native sidecars let a Job complete);
+      # it is the owner's choice, documented under exceptions.workloadInjection.
+      # DNS and the service's Aurora egress (name-keyed allow-egress-aurora,
+      # 5432 to AURORA_CIDR) only: every other policy of the namespace that
+      # could select the pods excludes component db-migration (no istiod, VPC
+      # endpoints, MSK, east-west or ingress). No principal, no Service, no
+      # call or telemetry edge, no secret slug.
+      - serviceAccount: customer-profile-kyc-service-db-migration
+        role: db-migration
+        migrates: customer-profile-kyc-service
+        sourceRepo: fintechbankx-customer-profile-kyc-core
+        selector:
+          app.kubernetes.io/name: customer-profile-kyc-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
+  - name: risk
+    context: risk
+    kind: service
+    workloads:
+      - serviceAccount: risk-decisioning-service
+        serviceId: svc-rsk-decisioning
+        sourceRepo: fintechbankx-riskcompliance-risk-decisioning-core
+        apiPrefix: /api/v1/risk
+        datastores: [aurora-postgresql, msk]
+      # Flyway migration Job (Helm pre-install/pre-upgrade hook), branch
+      # claude/customer-risk-compliance-deployable-ygi0zo 6edae99:
+      # deploy/helm/risk-decisioning-service/templates/migration-job.yaml:39-49,
+      # _helpers.tpl:34-42, values.yaml:16-19.
+      # Same labels, ServiceAccount and policy shape as the customer Job above.
+      - serviceAccount: risk-decisioning-service-db-migration
+        role: db-migration
+        migrates: risk-decisioning-service
+        sourceRepo: fintechbankx-riskcompliance-risk-decisioning-core
+        selector:
+          app.kubernetes.io/name: risk-decisioning-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
+  - name: compliance
+    context: compliance
+    kind: service
+    workloads:
+      - serviceAccount: compliance-evidence-service
+        serviceId: svc-cmp-evidence
+        sourceRepo: fintechbankx-riskcompliance-compliance-evidence-core
+        apiPrefix: /api/v1/compliance
+        datastores: [aurora-postgresql, msk]
+      # Flyway migration Job (Helm pre-install/pre-upgrade hook), branch
+      # claude/customer-risk-compliance-deployable-ygi0zo 67c4cc1 (opt-out since
+      # 685c4aa): deploy/helm/compliance-evidence-service/templates/
+      # migration-job.yaml:39-49, _helpers.tpl:34-42, values.yaml:16-19.
+      # Same labels, ServiceAccount and policy shape as the customer Job above.
+      - serviceAccount: compliance-evidence-service-db-migration
+        role: db-migration
+        migrates: compliance-evidence-service
+        sourceRepo: fintechbankx-riskcompliance-compliance-evidence-core
+        selector:
+          app.kubernetes.io/name: compliance-evidence-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
+  - name: open-finance
+    context: open-finance
+    kind: service
+    # Service accounts and datastores confirmed by the open-finance service
+    # threads (2026-10-08). API prefixes from the controllers on branch
+    # claude/project-thread-nfwa8t. Tokens are validated by the services
+    # themselves (DPoP/FAPI), see exceptions.requestAuthentication.
+    workloads:
+      - serviceAccount: consent-authorization-service
+        serviceId: svc-of-consent-authorization
+        sourceRepo: fintechbankx-openfinance-consent-auth-service
+        # TPP consents, the PSU authorization flow (/oauth2) and the
+        # first-party consent actions (/api/v1/consents/{id}/authorize|revoke);
+        # GET /api/v1/consents/{id} is the in-cluster service view (no gateway
+        # ALLOW) and /internal/v1 is never routed. Consent PR #13 a81579a.
+        apiPrefix: [/open-finance/v1/consents, /oauth2, /api/v1/consents]
+        datastores: [aurora-postgresql, msk]
+      # Flyway migration Job consent-authorization-service-migrate (Helm
+      # pre-install/pre-upgrade hook), consent e4f56b1:
+      # deploy/helm/consent-authorization-service/templates/migration-job.yaml:52-61,
+      # _helpers.tpl:34-38. Pod labels consent.migrationSelectorLabels
+      # (app.kubernetes.io/name <service>, instance <release>, component
+      # db-migration), fintechbankx.io/service-id and the label
+      # sidecar.istio.io/inject "false". Runs as the namespace default
+      # ServiceAccount (no serviceAccountName) with
+      # automountServiceAccountToken false: no token, no IAM role. Reads
+      # FLYWAY_PASSWORD from the hook Secret
+      # consent-authorization-service-db-migration (<env>/consent-authorization-service/db-migration)
+      # and mounts the rds-ca-bundle ConfigMap; DatabaseMigrationCommand is
+      # plain Flyway against DB_URL (password auth, no AWS client). The
+      # chart's own hook NetworkPolicy (networkpolicy-migration.yaml) also
+      # limits it to DNS and 5432. Same selector and policy shape as the
+      # customer Job: DNS and the name-keyed Aurora egress only.
+      - serviceAccount: default
+        name: consent-authorization-service-migrate
+        role: db-migration
+        migrates: consent-authorization-service
+        sourceRepo: fintechbankx-openfinance-consent-auth-service
+        selector:
+          app.kubernetes.io/name: consent-authorization-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
+      - serviceAccount: payee-verification-service
+        serviceId: svc-of-payee-verification
+        sourceRepo: fintechbankx-openfinance-payee-metadata-payee-verification
+        apiPrefix: /open-finance/v1/confirmation-of-payee
+        datastores: [aurora-postgresql, msk]
+      - serviceAccount: personal-financial-data-service
+        serviceId: svc-of-personal-financial-data
+        sourceRepo: fintechbankx-openfinance-retail-data-personal-financial
+        apiPrefix: /open-finance/v1/accounts
+        datastores: [documentdb, elasticache-redis, msk]
+      - serviceAccount: business-financial-data-service
+        serviceId: svc-of-business-financial-data
+        sourceRepo: fintechbankx-openfinance-corporate-data-business-financial
+        apiPrefix: /open-finance/v1/corporate
+        datastores: [documentdb, elasticache-redis, msk]
+      - serviceAccount: banking-metadata-service
+        serviceId: svc-of-banking-metadata
+        sourceRepo: fintechbankx-openfinance-payee-metadata-banking-metadata
+        apiPrefix: /open-finance/v1/metadata
+        datastores: [documentdb, elasticache-redis, msk]
+      - serviceAccount: atm-directory-service
+        serviceId: svc-of-atm-directory
+        sourceRepo: fintechbankx-openfinance-open-data-atm-directory
+        apiPrefix: /open-finance/v1/atms
+        datastores: [aurora-postgresql]
+      - serviceAccount: open-products-catalog-service
+        serviceId: svc-of-open-products-catalog
+        sourceRepo: fintechbankx-openfinance-open-data-products-catalog
+        apiPrefix: /open-finance/v1/products
+        datastores: [aurora-postgresql]
+      # History-guard check pods (products PR #14, chart templates/
+      # history-guard-check.yaml): the 15-minute verify CronJob and the
+      # pre-upgrade gate Job. They run as the Deployment's ServiceAccount
+      # WITHOUT a sidecar because the products chart opts out
+      # (sidecar.istio.io/inject "false"; documented exception below). The
+      # mesh does not need that opt-out: native sidecars let a Job complete.
+      # They carry app.kubernetes.io/name
+      # open-products-catalog-service and component history-guard-check.
+      # They get DNS and the products Aurora egress (the name-keyed
+      # allow-egress-aurora, 5432 to AURORA_CIDR) and nothing else: every other
+      # open-finance policy that could select them excludes the component
+      # (no istiod, VPC endpoints, MSK, east-west or ingress). No principal, no
+      # Service, no call or telemetry edge, no secret slug.
+      - serviceAccount: open-products-catalog-service
+        name: open-products-catalog-service-history-guard-check
+        role: history-guard-check
+        checks: open-products-catalog-service
+        sourceRepo: fintechbankx-openfinance-open-data-products-catalog
+        selector:
+          app.kubernetes.io/name: open-products-catalog-service
+          app.kubernetes.io/component: history-guard-check
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
+  - name: identity
+    context: identity
+    kind: platform
+    # From fintechbankx-platform-identity-iam-keycloak-ldap deploy/kustomize
+    # (Keycloak Operator CR, OpenLDAP component for dev/staging, realm import Job).
+    workloads:
+      - serviceAccount: keycloak
+        serviceId: svc-idn-keycloak-ldap
+        sourceRepo: fintechbankx-platform-identity-iam-keycloak-ldap
+        datastores: [aurora-postgresql]
+      - serviceAccount: openldap
+        serviceId: platform-identity-openldap
+        sourceRepo: fintechbankx-platform-identity-iam-keycloak-ldap
+        destinationRule: false
+      # keycloak-config-cli Job; native sidecar (sidecar.istio.io/nativeSidecar)
+      # so the Job completes inside the mesh.
+      - serviceAccount: keycloak-realm-import
+        serviceId: platform-identity-realm-import
+        sourceRepo: fintechbankx-platform-identity-iam-keycloak-ldap
+        service: null
+  - name: observability
+    context: observability
+    kind: platform
+    # From fintechbankx-platform-observability-sre-operations deploy/values
+    # (helm template of the pinned charts). Selectors are the chart pod labels;
+    # several Tempo and Loki components share one service account, so their
+    # principal is the same and only the pod selector differs.
+    # Observability backends keep Istio defaults (destinationRule: false):
+    # outlier ejection on stateful ingesters and the Prometheus HA pair would
+    # do more harm than good.
+    workloads:
+      - serviceAccount: otel-collector
+        serviceId: platform-observability-otel-collector
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: opentelemetry-collector, app.kubernetes.io/instance: otel-collector}
+        destinationRule: false
+      - serviceAccount: otel-gateway
+        serviceId: platform-observability-otel-gateway
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: opentelemetry-collector, app.kubernetes.io/instance: otel-gateway}
+        destinationRule: false
+      - serviceAccount: prometheus
+        serviceId: platform-observability-prometheus
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        # Bypasses its sidecar outbound (includeOutboundIPRanges "") and
+        # scrapes with the Istio workload certificate (OUTPUT_CERTS).
+        destinationRule: false
+      - serviceAccount: kube-prometheus-stack-alertmanager
+        name: alertmanager
+        serviceId: platform-observability-alertmanager
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: alertmanager}
+        destinationRule: false
+        datastores: [alert-receivers]
+      - serviceAccount: grafana
+        serviceId: platform-observability-grafana
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        destinationRule: false
+        datastores: [aurora-postgresql]
+      - serviceAccount: tempo
+        serviceId: platform-observability-tempo
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        destinationRule: false
+        datastores: [aws-s3]
+      - serviceAccount: tempo
+        name: tempo-distributor
+        serviceId: platform-observability-tempo
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: tempo, app.kubernetes.io/component: distributor}
+        destinationRule: false
+      - serviceAccount: tempo
+        name: tempo-query-frontend
+        serviceId: platform-observability-tempo
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: tempo, app.kubernetes.io/component: query-frontend}
+        destinationRule: false
+      - serviceAccount: tempo
+        name: tempo-metrics-generator
+        serviceId: platform-observability-tempo
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: tempo, app.kubernetes.io/component: metrics-generator}
+        destinationRule: false
+      - serviceAccount: loki
+        serviceId: platform-observability-loki
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        destinationRule: false
+        datastores: [aws-s3]
+      - serviceAccount: loki
+        name: loki-gateway
+        serviceId: platform-observability-loki
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: loki, app.kubernetes.io/component: gateway}
+        destinationRule: false
+      # Loki ruler (SimpleScalable backend pods) sends alerts to Alertmanager.
+      - serviceAccount: loki
+        name: loki-backend
+        serviceId: platform-observability-loki
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: loki, app.kubernetes.io/component: backend}
+        destinationRule: false
+      - serviceAccount: yace
+        serviceId: platform-observability-yace
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        destinationRule: false
+      # No sidecar (documented exception below): NetworkPolicy only, never a
+      # principal in an AuthorizationPolicy.
+      - serviceAccount: kube-prometheus-stack-kube-state-metrics
+        name: kube-state-metrics
+        serviceId: platform-observability-kube-state-metrics
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: kube-state-metrics}
+        sidecar: false
+      - serviceAccount: kube-prometheus-stack-operator
+        name: prometheus-operator
+        serviceId: platform-observability-prometheus-operator
+        sourceRepo: fintechbankx-platform-observability-sre-operations
+        selector: {app.kubernetes.io/name: kube-prometheus-stack-prometheus-operator}
+        sidecar: false
+  - name: istio-ingress
+    context: platform
+    kind: platform
+    # Gateway pods use the istio/gateway chart's `gateway` injection template;
+    # the addendum's injected list names only workload namespaces, and does
+    # not list istio-ingress as non-injected.
+    workloads:
+      - serviceAccount: istio-ingressgateway
+        serviceId: platform-mesh-ingress-gateway
+        sourceRepo: fintechbankx-platform-mesh-security-service-mesh
+  - name: istio-system
+    context: platform
+    kind: platform
+    injection: none
+    workloads: []
+  - name: external-secrets
+    context: platform
+    kind: platform
+    injection: disabled
+    workloads: []
+  # cert-manager and trust-manager (k8s/platform/cert-manager): cluster
+  # resource and trust namespace for the internal CA key pair and bundle sources.
+  - name: cert-manager
+    context: platform
+    kind: platform
+    injection: disabled
+    workloads: []
+
+# Secret delivery (External Secrets Operator -> AWS Secrets Manager), security
+# review 2026-10-08. Two ClusterSecretStores, each with its own ESO service
+# account and IRSA role (k8s/platform/external-secrets):
+#  - serviceStore: service namespaces (label fintechbankx.io/namespace-kind=
+#    service) plus sharedStoreNamespaces; its role must not read platform keys.
+#  - platformStore: only platformStoreNamespaces; holds the internal CA key,
+#    ingress TLS and the Keycloak bootstrap/admin material.
+# The generated ValidatingAdmissionPolicy (externalsecret-admission.yaml) makes
+# every ExternalSecret in a governed namespace use serviceStore and read only
+# keys <env>/<slug>/...: in a service namespace <slug> is the ExternalSecret's
+# app.kubernetes.io/name label and must be one of that namespace's service
+# accounts (payments holds four services); in a shared namespace <slug> is one
+# of its listed slugs.
+secrets:
+  serviceStore: aws-secrets-manager
+  serviceStoreServiceAccount: external-secrets
+  platformStore: aws-secrets-manager-platform
+  platformStoreServiceAccount: external-secrets-platform
+  platformStoreNamespaces: [cert-manager, istio-ingress, identity]
+  # Second path segment of keys that only the platform store may read.
+  platformKeyPrefixes: [platform, identity-keycloak]
+  # Platform namespaces that stay on the service store, with their key slugs
+  # (observability repo deploy/kustomize/prereqs: <env>/observability/*,
+  # <env>/observability-grafana/oidc-client).
+  sharedStoreNamespaces:
+    observability: [observability, observability-grafana]
+
+# Documented exceptions. The validator fails on any weakening not listed here.
+exceptions:
+  injection:
+    - namespace: istio-system
+      reason: Istio control plane; never injected.
+    - namespace: external-secrets
+      reason: >-
+        Not injected per platform contract addendum (2026-10-08). The ESO
+        admission webhook is called by the kube-apiserver, which is not in the
+        mesh; ESO only talks to the kube-apiserver and AWS Secrets Manager/STS.
+    - namespace: cert-manager
+      reason: >-
+        cert-manager and trust-manager webhooks are called by the
+        kube-apiserver (outside the mesh); they talk only to the kube-apiserver
+        (CA issuer, no ACME). Holds the internal CA key pair.
+  # Workloads in injected namespaces that run without a sidecar. They cannot
+  # present a principal, so no AuthorizationPolicy names them.
+  workloadInjection:
+    - workload: observability/prometheus-operator
+      reason: >-
+        The kube-apiserver (outside the mesh) calls the operator's admission
+        webhook on 10250.
+    - workload: observability/kube-state-metrics
+      reason: Only scraped by Prometheus (plain HTTP 8080, NetworkPolicy-scoped); talks only to the kube-apiserver.
+    - workload: observability/node-exporter
+      reason: hostNetwork DaemonSet; scraped on the node IP (9100).
+    - workload: open-finance/open-products-catalog-service-history-guard-check
+      reason: >-
+        Products history-guard verify CronJob and pre-upgrade gate Job
+        (products PR #14). The products chart sets sidecar.istio.io/inject
+        "false" on them; this mesh does not require it (istiod injects native
+        sidecars, so a Job completes with one, as the keycloak-realm-import
+        Job does). Accepted as the owner's choice pending the
+        open-finance/products decision; if products drops the opt-out, the
+        pods run meshed (no ALLOW names them) and this entry and the
+        renderer's sidecar-less rule are revisited.
+        Scoped to pods labelled app.kubernetes.io/name
+        open-products-catalog-service AND component history-guard-check: DNS
+        and the products Aurora (5432) only, no ingress, no principal. The
+        products Deployment keeps its sidecar.
+    - workload: customer/customer-profile-kyc-service-db-migration
+      reason: >-
+        Flyway migration Job of customer-profile-kyc-service (CRC branch
+        claude/customer-risk-compliance-deployable-ygi0zo 90b88d8, chart
+        templates/migration-job.yaml). The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the CRC
+        decision. Scoped to pods labelled app.kubernetes.io/name customer-profile-kyc-service
+        AND component db-migration: DNS and the customer Aurora (5432) only, no
+        ingress, no principal. The customer-profile-kyc-service Deployment keeps its sidecar.
+    - workload: risk/risk-decisioning-service-db-migration
+      reason: >-
+        Flyway migration Job of risk-decisioning-service (CRC branch
+        claude/customer-risk-compliance-deployable-ygi0zo 6edae99, chart
+        templates/migration-job.yaml). The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the CRC
+        decision. Scoped to pods labelled app.kubernetes.io/name risk-decisioning-service
+        AND component db-migration: DNS and the risk Aurora (5432) only, no
+        ingress, no principal. The risk-decisioning-service Deployment keeps its sidecar.
+    - workload: compliance/compliance-evidence-service-db-migration
+      reason: >-
+        Flyway migration Job of compliance-evidence-service (CRC branch
+        claude/customer-risk-compliance-deployable-ygi0zo 67c4cc1, chart
+        templates/migration-job.yaml). The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the CRC
+        decision. Scoped to pods labelled app.kubernetes.io/name compliance-evidence-service
+        AND component db-migration: DNS and the compliance Aurora (5432) only, no
+        ingress, no principal. The compliance-evidence-service Deployment keeps its sidecar.
+    - workload: lending/loan-lifecycle-service-db-migration
+      reason: >-
+        Flyway migration Job of loan-lifecycle-service (loan 629444d, chart
+        templates/migration-job.yaml), run as the namespace default
+        ServiceAccount without a token. The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the
+        lending decision. Scoped to pods labelled app.kubernetes.io/name loan-lifecycle-service
+        AND component db-migration: DNS and the loan Aurora (5432) only, no
+        ingress, no principal. The loan-lifecycle-service Deployment keeps its sidecar.
+    - workload: payments/payment-initiation-settlement-service-db-migration
+      reason: >-
+        Flyway migration Job of payment-initiation-settlement-service (initiation/settlement 9671414, chart
+        templates/migration-job.yaml), run as the namespace default
+        ServiceAccount without a token. The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the
+        payments decision. Scoped to pods labelled app.kubernetes.io/name payment-initiation-settlement-service
+        AND component db-migration: DNS and the initiation/settlement Aurora (5432) only, no
+        ingress, no principal. The payment-initiation-settlement-service Deployment keeps its sidecar.
+    - workload: payments/payment-request-to-pay-service-db-migration
+      reason: >-
+        Flyway migration Job of payment-request-to-pay-service (request to pay 2cd8e3c, chart
+        templates/migration-job.yaml), run as the namespace default
+        ServiceAccount without a token. The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the
+        payments decision. Scoped to pods labelled app.kubernetes.io/name payment-request-to-pay-service
+        AND component db-migration: DNS and the request-to-pay Aurora (5432) only, no
+        ingress, no principal. The payment-request-to-pay-service Deployment keeps its sidecar.
+    - workload: payments/payment-recurring-mandates-service-db-migration
+      reason: >-
+        Flyway migration Job of payment-recurring-mandates-service (recurring mandates ceb45b5, chart
+        templates/migration-job.yaml), run as the namespace default
+        ServiceAccount without a token. The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the
+        payments decision. Scoped to pods labelled app.kubernetes.io/name payment-recurring-mandates-service
+        AND component db-migration: DNS and the recurring-mandates Aurora (5432) only, no
+        ingress, no principal. The payment-recurring-mandates-service Deployment keeps its sidecar.
+    - workload: payments/payment-bulk-orchestration-service-db-migration
+      reason: >-
+        Flyway migration Job of payment-bulk-orchestration-service (bulk orchestration fe1d583, chart
+        templates/migration-job.yaml), run as the namespace default
+        ServiceAccount without a token. The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the
+        payments decision. Scoped to pods labelled app.kubernetes.io/name payment-bulk-orchestration-service
+        AND component db-migration: DNS and the bulk-orchestration Aurora (5432) only, no
+        ingress, no principal. The payment-bulk-orchestration-service Deployment keeps its sidecar.
+    - workload: open-finance/consent-authorization-service-migrate
+      reason: >-
+        Flyway migration Job of consent-authorization-service (consent e4f56b1, chart
+        templates/migration-job.yaml), run as the namespace default
+        ServiceAccount without a token. The chart sets sidecar.istio.io/inject
+        "false" on the pods; this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the
+        open-finance decision. Scoped to pods labelled app.kubernetes.io/name consent-authorization-service
+        AND component db-migration: DNS and the consent Aurora (5432) only, no
+        ingress, no principal. The consent-authorization-service Deployment keeps its sidecar.
+  peerAuthentication: []          # no PERMISSIVE or DISABLE anywhere
+  requestAuthentication:
+    - namespace: open-finance
+      reason: >-
+        Open-finance services validate their own FAPI/DPoP tokens: the issuer
+        is per-service configuration (OPENFINANCE_*_JWT_ISSUER, empty by
+        default; consent-auth issues openfinance-internal-auth tokens), tokens
+        arrive as "Authorization: DPoP" or "Bearer", and the open-data APIs
+        (ATMs, products) are public. A Keycloak-issuer RequestAuthentication
+        with aud = service id would reject valid TPP calls, so the namespace
+        relies on default-deny plus per-principal ALLOW rules and the
+        services' own token checks. Revisit once the issuer is fixed in the
+        platform contract.
+  networkPolicyDefaultDeny:
+    - namespace: istio-system
+      reason: istiod webhooks are called from EKS control-plane ENIs; not yet drilled.
+    - namespace: external-secrets
+      reason: ESO webhook is called from EKS control-plane ENIs; not yet drilled.
+    - namespace: cert-manager
+      reason: cert-manager / trust-manager webhooks are called from EKS control-plane ENIs; not yet drilled.
+
+# Synchronous call edges (caller -> callee). Every edge renders an ALLOW
+# AuthorizationPolicy on the callee and matching NetworkPolicies.
+edges:
+  # North-south: ingress gateway -> service APIs (JWT required, see requireJwt).
+  - from: istio-ingress/istio-ingressgateway
+    to: lending/loan-lifecycle-service
+    port: 8080
+    paths: [/api/v1/loans, /api/v1/loans/*]
+    evidence: loan-infrastructure LoanController @RequestMapping("/api/v1/loans")
+  - from: istio-ingress/istio-ingressgateway
+    to: payments/payment-initiation-settlement-service
+    port: 8080
+    paths: [/api/v1/payments, /api/v1/payments/*]
+    evidence: payment-infrastructure controller @RequestMapping("/api/v1/payments")
+  # Gateway -> customer: first-party clients only (identity review
+  # 2026-10-08): customers sign in through fintechbankx-web or
+  # fintechbankx-mobile, staff through fintechbankx-staff-web. request.auth is
+  # set by the customer workload's RequestAuthentication (aud
+  # svc-cus-profile-kyc); the gateway forwards the token it validated.
+  # Service-only credit operations stay off the public gateway (review
+  # finding, customer thread 2026-10-08): only loan-lifecycle calls
+  # POST credit/reserve|release. GET /credit and GET /kyc-status stay public
+  # (CUSTOMER self-read, BANKER, ADMIN; customer thread 2026-10-08), so
+  # /credit and everything below it is excluded here and GET /credit is
+  # allowed by the next edge alone.
+  - from: istio-ingress/istio-ingressgateway
+    to: customer/customer-profile-kyc-service
+    port: 8080
+    paths: [/api/v1/customers, /api/v1/customers/*]
+    notPaths: ["/api/v1/customers/{*}/credit"]
+    when: &first-party-azp
+      - key: request.auth.claims[azp]
+        values: [fintechbankx-web, fintechbankx-mobile, fintechbankx-staff-web]
+    evidence: customer-infrastructure CustomerController @RequestMapping("/api/v1/customers")
+  - from: istio-ingress/istio-ingressgateway
+    to: customer/customer-profile-kyc-service
+    port: 8080
+    methods: [GET]
+    paths: ["/api/v1/customers/{*}/credit"]
+    when: *first-party-azp
+    evidence: customer thread 2026-10-08, GET /api/v1/customers/{id}/credit (CUSTOMER self-read, BANKER, ADMIN)
+  - from: istio-ingress/istio-ingressgateway
+    to: risk/risk-decisioning-service
+    port: 8080
+    paths: [/api/v1/risk, /api/v1/risk/*]
+    notPaths: [/api/v1/risk/assess]   # called by payments only (service-only, review finding)
+    evidence: risk controller @RequestMapping("/api/v1/risk")
+  - from: istio-ingress/istio-ingressgateway
+    to: compliance/compliance-evidence-service
+    port: 8080
+    paths: [/api/v1/compliance, /api/v1/compliance/*]
+    notPaths: [/api/v1/compliance/screen]   # called by payments only (service-only, review finding)
+    evidence: compliance controller @RequestMapping("/api/v1/compliance")
+  - from: istio-ingress/istio-ingressgateway
+    to: identity/keycloak
+    port: 8080
+    paths: [/realms/fintechbankx/*, /resources/*]
+    evidence: platform contract (realm fintechbankx); admin console and master realm stay unreachable
+
+  # East-west: loan -> customer credit (CustomerProfileHttpAdapter, caller JWT propagated).
+  # Since a33b418 the loan service calls with its own client-credentials token
+  # (client id svc-ln-loan-lifecycle); Keycloak must put svc-cus-profile-kyc in aud.
+  - from: lending/loan-lifecycle-service
+    to: customer/customer-profile-kyc-service
+    port: 8080
+    methods: [GET]
+    paths: [/api/v1/customers/*]
+    evidence: CUSTOMER_SERVICE_BASE_URL=http://customer-profile-kyc-service.customer.svc.cluster.local:8080; GET /api/v1/customers/{customerId}
+  - from: lending/loan-lifecycle-service
+    to: customer/customer-profile-kyc-service
+    port: 8080
+    methods: [POST]
+    paths: ["/api/v1/customers/{*}/credit/reserve", "/api/v1/customers/{*}/credit/release"]
+    evidence: CustomerProfileHttpAdapter POST /api/v1/customers/{customerId}/credit/{reserve|release}
+
+  # East-west: payments -> customer KYC status (kycVerified fix, customer thread
+  # 2026-10-08). SERVICE caller: aud svc-cus-profile-kyc, azp
+  # svc-pay-initiation-settlement (customer's SERVICE_CALLERS_KYC). No PII in the
+  # response. Staff and the customer read it through the gateway like GET /credit.
+  - from: payments/payment-initiation-settlement-service
+    to: customer/customer-profile-kyc-service
+    port: 8080
+    methods: [GET]
+    paths: ["/api/v1/customers/{*}/kyc-status"]
+    evidence: customer thread 2026-10-08, GET /api/v1/customers/{id}/kyc-status for payments
+
+  # payments -> risk / compliance: confirmed by the service threads
+  # (coordinator, 2026-10-08). No HTTP adapter exists on the payment branch yet,
+  # so methods and paths are unknown and the rule is port-scoped only.
+  - from: payments/payment-initiation-settlement-service
+    to: risk/risk-decisioning-service
+    port: 8080
+    scope: port-only
+    evidence: confirmed by service thread 2026-10-08; adapter not yet on claude/project-thread-ty79y4
+  - from: payments/payment-initiation-settlement-service
+    to: compliance/compliance-evidence-service
+    port: 8080
+    scope: port-only
+    evidence: confirmed by service thread 2026-10-08; adapter not yet on claude/project-thread-ty79y4
+
+  # North-south: ingress gateway -> open-finance APIs (service-side DPoP/FAPI).
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/consent-authorization-service
+    port: 8080
+    paths: [/open-finance/v1/consents, /open-finance/v1/consents/*]
+    evidence: confirmed by service thread 2026-10-08; ConsentController /open-finance/v1/consents
+  # One edge per (method, path) pair: an Istio operation ANDs its methods and
+  # paths as sets, so [GET, POST] x [authorize, token] would also allow
+  # POST /oauth2/authorize and GET /oauth2/token (security review 2026-10-08).
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/consent-authorization-service
+    port: 8080
+    methods: [GET]
+    paths: [/oauth2/authorize]
+    evidence: consent PR #13 a81579a PkceAuthorizationController GET /oauth2/authorize (PSU authorization flow)
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/consent-authorization-service
+    port: 8080
+    methods: [POST]
+    paths: [/oauth2/token]
+    evidence: consent PR #13 a81579a PkceAuthorizationController POST /oauth2/token (PSU authorization flow)
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/consent-authorization-service
+    port: 8080
+    methods: [POST]
+    paths: ["/api/v1/consents/{*}/authorize"]
+    evidence: consent PR #13 a81579a FirstPartyConsentController POST /api/v1/consents/{id}/authorize (first-party web/mobile, Keycloak token checked by the service)
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/consent-authorization-service
+    port: 8080
+    methods: [PATCH]
+    paths: ["/api/v1/consents/{*}/revoke"]
+    evidence: consent PR #13 a81579a FirstPartyConsentController PATCH /api/v1/consents/{id}/revoke (first-party web/mobile, Keycloak token checked by the service)
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/consent-authorization-service
+    port: 8080
+    methods: [GET]
+    paths: [/api/v1/consents]
+    evidence: open finance thread 2026-10-08 - first-party GET /api/v1/consents (the PSU's own consents); GET /api/v1/consents/{id} stays in-cluster
+  - from: istio-ingress/istio-ingressgateway
+    to: payments/payment-recurring-mandates-service
+    port: 8080
+    paths: [/open-finance/v1/vrp/payment-consents, /open-finance/v1/vrp/payment-consents/*, /open-finance/v1/vrp/payments, /open-finance/v1/vrp/payments/*]
+    evidence: recurring-mandates PR #13 f8bc1b0 @RequestMapping("/open-finance/v1/vrp"); TPP-facing, DPoP, aud svc-pay-recurring-mandates
+  # Gateway -> request to pay: one edge per (method, path), like the consent
+  # flow above (an operation ANDs methods and paths as sets). Istio 1.24
+  # AuthorizationPolicy paths have no regex, so {*} admits any id segment;
+  # the CONS-RTP2- id split is done by the gateway routes (cutovers
+  # rtp-cutover R1/R2) and the service's own ownership check. 8081 is never
+  # reachable from the gateway.
+  - from: istio-ingress/istio-ingressgateway
+    to: payments/payment-request-to-pay-service
+    port: 8080
+    methods: [POST]
+    paths: [/open-finance/v1/par]
+    evidence: request-to-pay PR #14 d6049d7 POST /open-finance/v1/par (runbook R3); TPP-facing, DPoP, aud svc-pay-request-to-pay
+  - from: istio-ingress/istio-ingressgateway
+    to: payments/payment-request-to-pay-service
+    port: 8080
+    methods: [GET]
+    paths: ["/open-finance/v1/payment-consents/{*}"]
+    evidence: request-to-pay PR #14 d6049d7 GET /open-finance/v1/payment-consents/{id} (runbook R1)
+  - from: istio-ingress/istio-ingressgateway
+    to: payments/payment-request-to-pay-service
+    port: 8080
+    methods: [POST]
+    paths: ["/open-finance/v1/payment-consents/{*}/accept", "/open-finance/v1/payment-consents/{*}/reject"]
+    evidence: request-to-pay PR #14 d6049d7 POST /open-finance/v1/payment-consents/{id}/accept|reject (runbook R1)
+  - from: istio-ingress/istio-ingressgateway
+    to: payments/payment-bulk-orchestration-service
+    port: 8080
+    paths: [/open-finance/v1/file-payments, /open-finance/v1/file-payments/*]
+    evidence: bulk orchestration PR #13 1ab37d2 @RequestMapping("/open-finance/v1/file-payments"); TPP-facing, DPoP
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/payee-verification-service
+    port: 8080
+    paths: [/open-finance/v1/confirmation-of-payee, /open-finance/v1/confirmation-of-payee/*]
+    evidence: confirmed by service thread 2026-10-08; @RequestMapping("/open-finance/v1/confirmation-of-payee")
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/personal-financial-data-service
+    port: 8080
+    paths: [/open-finance/v1/accounts, /open-finance/v1/accounts/*]
+    evidence: confirmed by service thread 2026-10-08; /open-finance/v1/accounts
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/business-financial-data-service
+    port: 8080
+    paths: [/open-finance/v1/corporate/*]
+    evidence: confirmed by service thread 2026-10-08; /open-finance/v1/corporate/{accounts,transactions}
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/banking-metadata-service
+    port: 8080
+    paths: [/open-finance/v1/metadata/*]
+    evidence: confirmed by service thread 2026-10-08; /open-finance/v1/metadata/...
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/atm-directory-service
+    port: 8080
+    paths: [/open-finance/v1/atms, /open-finance/v1/atms/*]
+    evidence: confirmed by service thread 2026-10-08; /open-finance/v1/atms
+  - from: istio-ingress/istio-ingressgateway
+    to: open-finance/open-products-catalog-service
+    port: 8080
+    paths: [/open-finance/v1/products, /open-finance/v1/products/*]
+    evidence: confirmed by service thread 2026-10-08; /open-finance/v1/products
+
+  # payments -> open finance consent and payee verification: confirmed by the
+  # service threads (2026-10-08); no adapter on the payment branch yet.
+  # Egress NetworkPolicies are rendered per calling workload and target
+  # namespace (one rule per callee and its ports), so only bulk orchestration
+  # and recurring mandates reach consent-auth, and only initiation-settlement
+  # reaches payee verification, risk, compliance and customer; the other
+  # payment pods get no egress into those namespaces.
+  # payment-initiation-settlement-service has no consent edge: it does not call
+  # consent-auth (open finance and lending threads, 2026-10-08), and a
+  # port-only rule would reach /internal/v1 and /oauth2/token (review of mesh
+  # 2522b49). Add a (method, path) edge with evidence if an adapter appears.
+  - from: payments/payment-initiation-settlement-service
+    to: open-finance/payee-verification-service
+    port: 8080
+    scope: port-only
+    evidence: confirmed by service thread 2026-10-08; adapter not yet on claude/project-thread-ty79y4
+  - from: payments/payment-bulk-orchestration-service
+    to: open-finance/consent-authorization-service
+    port: 8080
+    methods: [GET]
+    paths: [/api/v1/consents/*]
+    evidence: confirmed by the lending and payments thread 2026-10-08 (bulk orchestration draft PR #13) and the open finance thread (consent GET /api/v1/consents/{id}, azp allow-list)
+  # GET /api/v1/consents/{id} (the in-cluster consent view) is open to bulk
+  # orchestration and recurring mandates only (security review 2026-10-08).
+  # request-to-pay has no confirmed caller adapter, so it gets no edge; add
+  # it back with evidence when one exists.
+  - from: payments/payment-recurring-mandates-service
+    to: open-finance/consent-authorization-service
+    port: 8080
+    methods: [GET]
+    paths: [/api/v1/consents/*]
+    evidence: confirmed by the open finance thread 2026-10-08 (consent GET /api/v1/consents/{id}, azp allow-list); caller adapter not yet confirmed
+
+  # Every Spring resource server fetches the realm JWKS (OIDC_JWK_SET_URI);
+  # client-credentials token exchange per platform contract.
+  - from: "*/service-workloads"
+    to: identity/keycloak
+    port: 8080
+    methods: [GET]
+    paths: [/realms/fintechbankx/protocol/openid-connect/certs, /realms/fintechbankx/.well-known/openid-configuration]
+    evidence: spring.security.oauth2.resourceserver.jwt.jwk-set-uri in every service application.yml
+  - from: "*/service-workloads"
+    to: identity/keycloak
+    port: 8080
+    methods: [POST]
+    paths: [/realms/fintechbankx/protocol/openid-connect/token]
+    evidence: platform contract - one confidential client per service, client-credentials
+  - from: customer/customer-profile-kyc-service
+    to: identity/keycloak
+    port: 8080
+    methods: [GET, PUT]
+    paths: [/admin/realms/fintechbankx/users, /admin/realms/fintechbankx/users/*]
+    evidence: >-
+      Customer thread 2026-10-08 (customer PR #13): PUT /api/v1/customers/{id}/identity-link
+      sets the user attribute customer_id through the Keycloak admin API as
+      svc-cus-profile-kyc (realm-management manage-users, identity PR #11).
+
+  # Telemetry: OTLP to the collector is covered by the */mesh-workloads edge
+  # below (platform contract: otel-collector.observability.svc.cluster.local:4317/4318).
+
+  # Scraping: Prometheus -> management port of every workload.
+  - from: observability/prometheus
+    to: "*/service-workloads"
+    port: 8081
+    methods: [GET]
+    paths: [/actuator/prometheus, /actuator/health, /actuator/health/*]
+    evidence: Helm pod annotations prometheus.io/port=8081, path /actuator/prometheus
+
+  # Identity internals (identity repo deploy/kustomize, docs/identity).
+  - from: identity/keycloak
+    to: identity/openldap
+    port: 389
+    evidence: >-
+      LDAP_CONNECTION_URL ldap://openldap.identity.svc.cluster.local:389 with
+      StartTLS (LDAP_TLS_ENFORCE); 636 is not exposed. dev/staging only; prod
+      federates the corporate directory (components/corporate-directory).
+  - from: identity/keycloak
+    to: identity/keycloak
+    ports: [7800, 57800]
+    evidence: >-
+      Keycloak 26 embedded Infinispan, JDBC_PING discovery, JGroups TCP 7800
+      and FD_SOCK2 failure detection on 7800+50000. Opaque TCP inside STRICT
+      mTLS; needs a headless Service declaring both ports (see docs).
+  - from: identity/keycloak-realm-import
+    to: identity/keycloak
+    port: 8080
+    paths: [/, /admin/*, /realms/*]
+    evidence: >-
+      keycloak-config-cli KEYCLOAK_URL http://keycloak.identity.svc.cluster.local:8080,
+      client_credentials token, availability check, admin REST.
+  - from: observability/prometheus
+    to: identity/keycloak
+    port: 9000
+    methods: [GET]
+    paths: [/metrics, /health, /health/*]
+    evidence: Keycloak CR httpManagement.port 9000; operator ServiceMonitor scrapes /metrics
+
+  # Telemetry from every meshed workload (application OTLP and Envoy tracing
+  # via meshConfig extensionProvider otel-tracing -> otel-collector:4317).
+  - from: "*/mesh-workloads"
+    to: observability/otel-collector
+    ports: [4317, 4318]
+    evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
+
+  # Observability pipeline (observability repo deploy/values).
+  - from: observability/otel-collector
+    to: observability/otel-gateway
+    port: 4317
+    evidence: agent loadbalancing exporter dns:///otel-gateway.observability.svc.cluster.local:4317
+  - from: observability/otel-gateway
+    to: observability/tempo-distributor
+    port: 4317
+    evidence: otlp exporter tempo-distributor.observability.svc.cluster.local:4317
+  - from: observability/otel-gateway
+    to: observability/loki-gateway
+    port: 8080
+    methods: [POST]
+    paths: [/otlp/*]
+    evidence: otlphttp exporter http://loki-gateway.observability.svc.cluster.local/otlp (Service 80 -> pod 8080)
+  - from: observability/otel-gateway
+    to: observability/prometheus
+    port: 9090
+    methods: [POST]
+    paths: [/api/v1/write]
+    evidence: prometheusremotewrite exporter .../api/v1/write (enableRemoteWriteReceiver)
+  - from: observability/tempo-metrics-generator
+    to: observability/prometheus
+    port: 9090
+    methods: [POST]
+    paths: [/api/v1/write]
+    evidence: tempo metricsGenerator remote_write .../api/v1/write (principal is the shared SA tempo)
+  - from: observability/grafana
+    to: observability/prometheus
+    port: 9090
+    evidence: Grafana datasource prometheus http://kube-prometheus-stack-prometheus...:9090
+  - from: observability/grafana
+    to: observability/loki-gateway
+    port: 8080
+    evidence: Grafana datasource loki http://loki-gateway.observability.svc.cluster.local
+  - from: observability/grafana
+    to: observability/tempo-query-frontend
+    port: 3100
+    evidence: Grafana datasource tempo http://tempo-query-frontend...:3100
+  - from: observability/grafana
+    to: observability/alertmanager
+    port: 9093
+    evidence: Grafana datasource alertmanager http://kube-prometheus-stack-alertmanager...:9093
+  - from: observability/grafana
+    to: identity/keycloak
+    port: 8080
+    paths:
+      - /realms/fintechbankx/protocol/openid-connect/token
+      - /realms/fintechbankx/protocol/openid-connect/userinfo
+      - /realms/fintechbankx/protocol/openid-connect/certs
+    evidence: >-
+      Grafana generic_oauth token and userinfo (confirmed by coordinator
+      2026-10-08). The observability values still point token_url/api_url at
+      https://<identity host>; they must use keycloak.identity.svc.cluster.local:8080
+      for this edge to be the path taken (backchannelDynamic keeps iss public).
+  - from: istio-ingress/istio-ingressgateway
+    to: observability/grafana
+    port: 3000
+    evidence: Grafana UI behind the ingress gateway (Keycloak SSO); route host not yet in params
+  - from: observability/prometheus
+    to: observability/alertmanager
+    port: 9093
+    evidence: Prometheus alertingEndpoints kube-prometheus-stack-alertmanager http-web
+  # Loki ruler -> Alertmanager (observability eca7aa0: alert
+  # KeycloakServiceAccountAdminEventOutOfScope). The principal is the SA loki,
+  # shared by every Loki component (AuthorizationPolicy cannot narrow it
+  # further); the edge NetworkPolicies select the backend pods only, on top of
+  # the namespace's allow-same-namespace rule. Loki 3.x notifier: Alertmanager
+  # API v2 only.
+  - from: observability/loki-backend
+    to: observability/alertmanager
+    port: 9093
+    methods: [POST]
+    paths: [/api/v2/alerts]
+    evidence: observability deploy/values/loki.yaml ruler.alertmanager_url http://kube-prometheus-stack-alertmanager.observability.svc.cluster.local:9093 (loki 6.16.0, Loki 3.1.1, backend pods)
+  - from: observability/prometheus
+    to: observability/prometheus
+    port: 9090
+    methods: [GET]
+    paths: [/metrics]
+    evidence: PodMonitor prometheus (scrape class istio-mtls), self-scrape of the HA pair
+  - from: observability/prometheus
+    to: observability/otel-collector
+    port: 8888
+    methods: [GET]
+    paths: [/metrics]
+    evidence: PodMonitor opentelemetry-collector port metrics
+  - from: observability/prometheus
+    to: observability/otel-gateway
+    port: 8888
+    methods: [GET]
+    paths: [/metrics]
+    evidence: PodMonitor opentelemetry-collector port metrics
+  - from: observability/prometheus
+    to: observability/tempo
+    port: 3100
+    methods: [GET]
+    paths: [/metrics]
+    evidence: PodMonitor tempo port http-metrics
+  - from: observability/prometheus
+    to: observability/loki
+    ports: [3100, 8080, 9150]
+    methods: [GET]
+    paths: [/metrics]
+    evidence: PodMonitor loki port http-metrics (read/write/backend 3100, gateway 8080, memcached 9150)
+  - from: observability/prometheus
+    to: observability/grafana
+    port: 3000
+    methods: [GET]
+    paths: [/metrics]
+    evidence: PodMonitor grafana port grafana
+  - from: observability/prometheus
+    to: observability/yace
+    port: 5000
+    methods: [GET]
+    paths: [/metrics]
+    evidence: PodMonitor yace port http
+  - from: observability/prometheus
+    to: observability/kube-state-metrics
+    port: 8080
+    evidence: kube-prometheus-stack ServiceMonitor kube-state-metrics (no sidecar, NetworkPolicy only)
+
+  # Component-internal traffic (same service account): gRPC 9095, HTTP 3100,
+  # memberlist 7946 (TCP; its UDP part is not intercepted by Istio), memcached
+  # 11211; Alertmanager cluster 9094.
+  - from: observability/tempo
+    to: observability/tempo
+    ports: [3100, 4317, 4318, 7946, 9095, 11211]
+    evidence: tempo-distributed 1.18.2 Services (ingester/querier/query-frontend/metrics-generator grpc 9095, gossip-ring 7946, memcached 11211)
+  - from: observability/loki
+    to: observability/loki
+    ports: [3100, 7946, 9095, 11211]
+    evidence: loki 6.16.0 SimpleScalable Services (gateway -> read/write 3100, grpc 9095, memberlist 7946, caches 11211)
+  - from: observability/alertmanager
+    to: observability/alertmanager
+    port: 9094
+    evidence: Alertmanager HA cluster (TCP 9094; UDP gossip is not intercepted)
+
+# External (MESH_EXTERNAL) dependencies reachable under REGISTRY_ONLY.
+externalDependencies:
+  aurora-postgresql:
+    port: 5432
+    protocol: TCP
+    cidrParam: AURORA_CIDR
+  documentdb:
+    port: 27017
+    protocol: TCP
+    cidrParam: DOCDB_CIDR
+  elasticache-redis:
+    port: 6379
+    protocol: TCP
+    cidrParam: REDIS_CIDR
+  # allow-egress-msk selects app.kubernetes.io/name AND
+  # app.kubernetes.io/component=service (the API pods); the other stores select
+  # on the name only, so a service's migration Job pods (component
+  # db-migration) reach Aurora but never the brokers. In a namespace with a
+  # sidecar-less Job workload, the store policies its Job does not declare
+  # exclude its component.
+  msk:
+    hosts: ["*.kafka.me-central-1.amazonaws.com"]
+    ports: [9098, 9094]
+    protocol: TLS
+    cidrParam: MSK_CIDR
+  # Observability egress (observability repo values): S3 for Tempo and Loki
+  # (gateway endpoint, public prefix list -> NetworkPolicy 0.0.0.0/0:443,
+  # host-restricted by REGISTRY_ONLY), AMP remote write, CloudWatch for YACE.
+  aws-s3:
+    hosts: ["s3.me-central-1.amazonaws.com", "*.s3.me-central-1.amazonaws.com"]
+    port: 443
+    protocol: TLS
+    cidr: 0.0.0.0/0
+  aws-observability-apis:
+    hosts:
+      - aps-workspaces.me-central-1.amazonaws.com
+      - monitoring.me-central-1.amazonaws.com
+      - tagging.me-central-1.amazonaws.com
+    port: 443
+    protocol: TLS
+    cidrParam: VPC_CIDR
+  alert-receivers:
+    hosts: [hooks.slack.com, events.pagerduty.com]
+    port: 443
+    protocol: TLS
+    cidr: 0.0.0.0/0
+  aws-apis:
+    hosts:
+      - sts.me-central-1.amazonaws.com
+      - secretsmanager.me-central-1.amazonaws.com
+      - kms.me-central-1.amazonaws.com
+    port: 443
+    protocol: TLS
+    cidrParam: VPC_CIDR
+  identity-external:
+    hosts: [IDENTITY_HOST]
+    port: 443
+    protocol: TLS
+
+# Call edges found in service configuration whose callee does not exist yet.
+gaps:
+  - from: payments/payment-initiation-settlement-service
+    to: core-banking accounts API
+    evidence: >-
+      payment-bootstrap application.yml payment.accounts.base-url
+      ${ACCOUNTS_SERVICE_BASE_URL:http://core-banking-accounts:8080};
+      CoreBankingAccountHttpAdapter GET /api/v1/accounts/{accountId}; Helm
+      values ACCOUNTS_SERVICE_BASE_URL is empty. No core-banking repo,
+      namespace or service account exists, so no policy allows it; with
+      ACCOUNTS_ADAPTER=http the service fails closed.
+  - from: payments/payment-initiation-settlement-service
+    to: risk, compliance, open-finance consent and payee verification (paths)
+    evidence: >-
+      Edges confirmed by the service threads but no adapter exists yet; the
+      ALLOW rules are port-only (8080) until methods and paths are known.

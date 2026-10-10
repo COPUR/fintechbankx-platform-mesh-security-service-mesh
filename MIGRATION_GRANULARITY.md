@@ -21,3 +21,18 @@
 - Follow-up refactoring may be needed to remove residual cross-context coupling.
 - Build artifacts and local machine files are excluded by policy.
 
+
+## Deployable baseline (2026-10-08, Proposed)
+
+- Additional monolith sources read (not copied verbatim):
+  `security/service-architecture/dependency-resilience-policies.yaml` (timeouts,
+  outlier detection) and `security/service-architecture/cell-a-zero-trust-policy-pack.yaml`
+  (default-deny + principal allow-list pattern).
+- Not imported: `k8s/sidecar/*` (custom injection webhook that conflicts with Istio).
+- Call edges taken from the service repos (branch `claude/project-thread-ty79y4`)
+  and the service threads; recorded in `contracts/mesh-contract.yaml`.
+- Repository name in this file's header predates the rename to
+  `fintechbankx-platform-mesh-security-service-mesh`.
+- Retired from the seeded `security/service-architecture/service-mesh-config.yaml`:
+  the Telemetry `banking-telemetry`, which tagged metrics and spans with customer
+  and transaction ids (validator rule R12 keeps such tags out).

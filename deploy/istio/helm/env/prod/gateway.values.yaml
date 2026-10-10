@@ -1,0 +1,3 @@
+# prod: production defaults from ../../gateway.values.yaml.
+autoscaling:
+  minReplicas: 3

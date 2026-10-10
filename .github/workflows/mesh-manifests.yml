@@ -1,0 +1,56 @@
+name: Mesh Manifests
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev, staging]
+
+permissions:
+  contents: read
+
+env:
+  KUSTOMIZE_VERSION: v5.5.0
+  KUBECONFORM_VERSION: v0.6.7
+  HELM_VERSION: v3.16.3
+
+jobs:
+  render-and-validate:
+    name: mesh/render-validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install validation tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+          curl -sSfL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" | tar -xz -C "$bin"
+          curl -sSfL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" | tar -xz -C "$bin"
+          istio_version="$(tr -d '[:space:]' < deploy/istio/ISTIO_VERSION)"
+          curl -sSfL "https://github.com/istio/istio/releases/download/${istio_version}/istioctl-${istio_version}-linux-amd64.tar.gz" | tar -xz -C "$bin"
+          # Pin helm: the runner's preinstalled helm uses a newer JSON-schema
+          # validator that rejects the Istio 1.24 gateway chart's own schema.
+          curl -sSfL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar -xz -C "$bin" --strip-components=1 linux-amd64/helm
+          echo "$bin" >> "$GITHUB_PATH"
+          "$bin/helm" version --short
+
+      - name: Unit tests and source validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test
+          npm run validate:strict-mtls
+
+      - name: Render overlays and Istio charts, then validate
+        shell: bash
+        run: bash scripts/ci/validate-manifests.sh
