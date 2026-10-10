@@ -182,15 +182,31 @@ DocumentDB data services render no migration.
 - The exclusion is by component alone (one selector cannot say NOT (name AND
   component)), so a meshed Job with the component of a sidecar-less Job in the
   same namespace would lose istiod, VPC endpoints and ingress with it. The
-  renderer refuses that mix (`checkSidecarLessJobComponents`): either every
-  `db-migration` Job of a namespace runs without a sidecar, or the
-  sidecar-less Job pods carry a component label of their own. In payments
-  all four Jobs are sidecar-less (request to pay since 2cd8e3c), so the
-  shared component is fine. Loan and the three other payments charts take
-  the opt-out from `migration.istioSidecar` (default `false`): a chart that
-  sets it `true` must also get the contract entry changed (a ServiceAccount
-  of its own and no `sidecar: false`), and in payments the other three Jobs
-  with it, or the render fails.
+  renderer refuses that mix (`checkSidecarLessJobComponents`): every
+  `db-migration` Job of a namespace runs without a sidecar, or every one
+  runs meshed (a `role: db-migration` selector is always name +
+  `component=db-migration`, so one Job cannot move to a component of its
+  own). In payments all four Jobs are sidecar-less (request to pay since
+  2cd8e3c), so the shared component is fine.
+- Loan and the three other payments charts take the opt-out from values
+  `migration.istioSidecar` (default `false`; each chart's values file says
+  to set it `true` once the cluster runs native sidecars, as this mesh
+  does). Setting it alone breaks the install: none of the four charts has a
+  value that gives the Job a ServiceAccount, so the Job runs meshed as the
+  namespace `default` ServiceAccount (no `serviceAccountName`). The renderer
+  refuses to model that (`checkNamespaceDefaultServiceAccount`: every pod
+  of the namespace without a ServiceAccount of its own would share its
+  principal), and under the current contract the pod still matches the
+  sidecar-less exclusion: no istiod egress, so its proxy never gets ready
+  (`holdApplicationUntilProxyStarts`), Flyway never starts and the hook
+  fails at the Job's deadline. A meshed Job first needs a chart template
+  change: a
+  ServiceAccount of its own created as a pre-install/pre-upgrade hook ahead
+  of the Job and named in its `serviceAccountName` (as the customer, risk
+  and compliance charts do; the release's own ServiceAccount does not exist
+  yet when a first install runs the hook). Only then can the contract entry
+  change (that ServiceAccount, no `sidecar: false`, no exception) and, in
+  payments, the other three Jobs with it, or the render fails.
 
 **Drill checklist for the first dev-cluster install** (not run yet; record the
 evidence with the install log). Use `helm upgrade --install ... --timeout 15m`

@@ -512,3 +512,31 @@ test('a meshed db-migration Job is refused in every service namespace, and the R
   const bullet = readme.slice(readme.indexOf('Flyway migration Job'));
   assert.match(bullet.slice(0, bullet.indexOf('- reference secrets')), /without a sidecar.*checkSidecarLessJobComponents/);
 });
+
+// Loan, payment initiation, recurring mandates and bulk orchestration take the
+// Job's opt-out from values migration.istioSidecar (default false; each
+// values.yaml says to set it true once the cluster runs native sidecars, as
+// this mesh does). None of them has a value that gives the Job a
+// ServiceAccount: rendered with --set migration.istioSidecar=true, the Job pod
+// keeps the labels below with sidecar.istio.io/inject "true" and still names
+// no serviceAccountName. Under the committed contract that pod gets no istiod
+// egress, and modelling it (meshed on the namespace default ServiceAccount) is
+// refused. The baseline says a chart template change (a hook ServiceAccount)
+// comes before the contract change.
+test('migration.istioSidecar true alone leaves a meshed Job on the default ServiceAccount, and the baseline says so', () => {
+  const FLIPPABLE = ['loan-lifecycle-service', 'payment-initiation-settlement-service', 'payment-recurring-mandates-service', 'payment-bulk-orchestration-service'];
+  for (const owner of FLIPPABLE) {
+    const j = DEFAULT_SA.find((x) => x.owner === owner);
+    const flipped = { ...j.pod, 'sidecar.istio.io/inject': 'true' };
+    assert.deepEqual(names(selecting(netpols, j.ns, flipped, 'Egress')), ['allow-egress-aurora', 'allow-egress-dns', 'default-deny-all'], `${owner}: flipped Job pod`);
+    const c = structuredClone(contract);
+    delete workload(c, j).sidecar;
+    c.exceptions.workloadInjection = c.exceptions.workloadInjection.filter((x) => x.workload !== `${j.ns}/${j.name}`);
+    assert.throws(() => render(c), new RegExp(`${j.ns}/${j.name}: only a sidecar-less Job .* may run as the namespace default ServiceAccount`));
+  }
+  const doc = readFileSync(join(repoRoot, 'docs/mesh/DEPLOYABLE_MESH_BASELINE.md'), 'utf8').split(/\n(?=- |\n)/).map((p) => p.replace(/\s+/g, ' '));
+  const flip = doc.filter((p) => p.includes('migration.istioSidecar'));
+  assert.equal(flip.length, 1, 'one baseline paragraph on migration.istioSidecar');
+  assert.match(flip[0], /serviceAccountName/, 'names the chart change the Job needs first');
+  assert.match(flip[0], /checkNamespaceDefaultServiceAccount/, 'says the renderer refuses the value flip alone');
+});
