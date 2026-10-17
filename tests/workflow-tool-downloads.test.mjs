@@ -44,56 +44,56 @@ const logicalLines = (run) =>
     .map((l) => l.trim())
     .filter((l) => l && !l.startsWith("#"));
 
-// One logical line -> shell words ({ word }, quotes and backslashes removed) and
-// operators ({ op }). $( ), <( ), >( ) and backticks open a nested command, also inside
-// double quotes; `{` and `}` as whole words are operators; a redirection such as 2>&1
-// stays one word; an unquoted # at the start of a word ends the line.
+// One logical line -> its token lists: first the line's own, then one for each command
+// substitution in it ($( ), <( ), >( ) or backticks, also inside double quotes). A
+// list holds shell words ({ word }, quotes and backslashes removed) and operators
+// ({ op }); a substitution stays in the word it is part of as its source text, so
+// -H "Authorization: Bearer $(cat t)" is one word. `{` and `}` as whole words are
+// operators; a redirection such as 2>&1 stays one word; an unquoted # at the start of a
+// word ends the line.
 function shellTokens(line) {
-  const tokens = [];
-  const open = []; // open command substitutions: { kind, dq } with dq the state outside
-  let word = null;
-  let dq = false;
-  const add = (s) => (word = (word ?? "") + s);
+  const lists = [];
+  const frames = [{ tokens: [], word: null, dq: false, kind: null }];
+  let f = frames[0];
+  const add = (s) => (f.word = (f.word ?? "") + s);
   const flush = () => {
-    if (word !== null) tokens.push(word === "{" || word === "}" ? { op: word } : { word });
-    word = null;
+    if (f.word !== null) f.tokens.push(f.word === "{" || f.word === "}" ? { op: f.word } : { word: f.word });
+    f.word = null;
   };
-  const op = (o) => (flush(), tokens.push({ op: o }));
+  const op = (o) => (flush(), f.tokens.push({ op: o }));
+  const open = (kind, start) => frames.push((f = { tokens: [], word: null, dq: false, kind, start }));
+  const close = (end) => {
+    flush();
+    const inner = frames.pop();
+    lists.push(inner.tokens);
+    f = frames[frames.length - 1];
+    add(line.slice(inner.start, end));
+  };
   for (let i = 0; i < line.length; i++) {
     const c = line[i];
     const two = line.slice(i, i + 2);
-    const top = open[open.length - 1];
     if (c === "\\") {
       const n = line[++i] ?? "";
-      add(dq && !'"$`\\'.includes(n) ? c + n : n);
-    } else if (c === "'" && !dq) {
+      add(f.dq && !'"$`\\'.includes(n) ? c + n : n);
+    } else if (c === "'" && !f.dq) {
       const end = line.indexOf("'", i + 1);
       add(line.slice(i + 1, end < 0 ? line.length : end));
       i = end < 0 ? line.length : end;
     } else if (c === '"') {
-      dq = !dq;
+      f.dq = !f.dq;
       add("");
-    } else if (two === "$(" || (!dq && (two === "<(" || two === ">("))) {
-      op("$(");
-      open.push({ kind: "$(", dq });
-      dq = false;
-      i++;
+    } else if (two === "$(" || (!f.dq && (two === "<(" || two === ">("))) {
+      open("$(", i++);
     } else if (c === "`") {
-      op("`");
-      if (top?.kind === "`" && !dq) {
-        dq = open.pop().dq;
-      } else {
-        open.push({ kind: "`", dq });
-        dq = false;
-      }
-    } else if (c === ")" && !dq && top?.kind === "$(") {
-      op(")");
-      dq = open.pop().dq;
-    } else if (dq) {
+      if (f.kind === "`" && !f.dq) close(i + 1);
+      else open("`", i);
+    } else if (c === ")" && !f.dq && f.kind === "$(") {
+      close(i + 1);
+    } else if (f.dq) {
       add(c);
     } else if (/\s/.test(c)) {
       flush();
-    } else if (c === "#" && word === null) {
+    } else if (c === "#" && f.word === null) {
       break;
     } else if (c === ">" || c === "<" || two === "&>") {
       add(two === "&>" || two === ">&" || two === "<&" ? two : c);
@@ -107,32 +107,35 @@ function shellTokens(line) {
       add(c);
     }
   }
+  while (frames.length > 1) close(line.length);
   flush();
-  return tokens;
+  return [f.tokens, ...lists];
 }
 
-// Logical line -> its simple commands: the words of each, the operator after it and the
-// index of the first token after it.
+// Token list -> its simple commands: the words of each and the operator after it.
 function simpleCommands(tokens) {
   const cmds = [];
   let words = [];
-  tokens.forEach((t, k) => {
-    if ("word" in t) return void words.push(t.word);
-    if (words.length) cmds.push({ words, after: t.op, next: k + 1 });
-    words = [];
-  });
-  if (words.length) cmds.push({ words, after: null, next: tokens.length });
+  for (const t of tokens) {
+    if ("word" in t) words.push(t.word);
+    else if (words.length) cmds.push({ words, after: t.op });
+    if (!("word" in t)) words = [];
+  }
+  if (words.length) cmds.push({ words, after: null });
   return cmds;
 }
 
 // The program a simple command runs, past assignments, the keywords that may start a
-// command and the wrappers sudo, env, timeout and command; written as curl, /usr/bin/curl,
-// \curl, "curl" or 'curl' it is curl. null when it runs nothing (command -v curl). A
-// program held in a variable ("$CURL") is out of scope: the scan cannot see it.
+// command and the wrappers sudo, env, timeout, command, time, nice, stdbuf and xargs
+// (xargs: true, its URLs come from its input); written as curl, /usr/bin/curl, \curl,
+// "curl" or 'curl' it is curl. null when it runs nothing (command -v curl). A program
+// held in a variable ("$CURL") is out of scope: the scan cannot see it.
 const ASSIGNMENT = /^[A-Za-z_]\w*\+?=/;
-const KEYWORDS = new Set(["!", "if", "then", "else", "elif", "do", "while", "until", "time", "exec", "nohup"]);
+const KEYWORDS = new Set(["!", "if", "then", "else", "elif", "do", "while", "until", "exec", "nohup", "builtin"]);
+const WRAPPER_OPTIONS = { sudo: /^-[ugpCDhrtTU]$/, timeout: /^-[sk]$/, time: /^-[fo]$/, nice: /^-n$/, stdbuf: /^-[ioe]$/, xargs: /^-[adEILnPs]$/ };
 function program(words) {
   const w = [...words];
+  let xargs = false;
   const skipOptions = (withValue) => {
     while (w.length && w[0].startsWith("-")) if (withValue.test(w.shift())) w.shift();
   };
@@ -140,20 +143,34 @@ function program(words) {
     while (w.length && (ASSIGNMENT.test(w[0]) || KEYWORDS.has(w[0]))) w.shift();
     if (!w.length) return null;
     const name = w[0].split("/").pop();
-    if (!["sudo", "env", "timeout", "command"].includes(name)) return { name, args: w.slice(1) };
+    if (name !== "env" && name !== "command" && !(name in WRAPPER_OPTIONS)) return { name, args: w.slice(1), xargs };
     w.shift();
-    if (name === "sudo") {
-      skipOptions(/^-[ugpCDhrtTU]$/);
-    } else if (name === "env") {
+    if (name === "env") {
       while (w.length && (w[0].startsWith("-") || ASSIGNMENT.test(w[0]))) if (/^-[uCS]$/.test(w.shift())) w.shift();
-    } else if (name === "timeout") {
-      skipOptions(/^-[sk]$/);
-      w.shift(); // the duration
-    } else {
+    } else if (name === "command") {
       if (w.length && /^-\w*[vV]/.test(w[0])) return null;
       skipOptions(/^$/);
+    } else {
+      skipOptions(WRAPPER_OPTIONS[name]);
+      if (name === "timeout") w.shift(); // the duration
+      if (name === "xargs") xargs = true;
     }
   }
+}
+
+// The commands `sh -c <string>` (also bash, dash, zsh, ksh, with -ec and the like) or
+// `eval <words>` runs, or null.
+const SHELLS = new Set(["sh", "bash", "dash", "zsh", "ksh"]);
+function shellString({ name, args }) {
+  if (name === "eval") return args.join(" ");
+  if (!SHELLS.has(name)) return null;
+  let c = false;
+  for (let k = 0; k < args.length; k++) {
+    if (/^[-+]o$/.test(args[k])) k++;
+    else if (/^-[A-Za-z]*c[A-Za-z]*$/.test(args[k])) c = true;
+    else if (!/^[-+]/.test(args[k])) return c ? args[k] : null;
+  }
+  return null;
 }
 
 // The file a curl (-o f, --output f, --output=f, -sSfLo f) or wget (-O f, -qO f,
@@ -167,32 +184,55 @@ function outputFile({ name, args }) {
   return null;
 }
 
+// What may follow a download on its own line: echo, printf or exit (as in
+// `|| { echo "::error::..."; exit 1; }`) or a bare assignment, none running a command
+// substitution. Anything else (tar, cd, cp, mkdir, ...) may use the file before its check.
+const SUBSTITUTION = /\$\(|`|[<>]\(/;
+const harmless = (c) => {
+  const p = program(c.words);
+  return (!p || ["echo", "printf", "exit"].includes(p.name)) && !c.words.some((w) => SUBSTITUTION.test(w));
+};
+
 // Every download in one run block, each with the reason it is unsafe (or null). A download
-// is a curl or wget command with an http(s):// URL argument, so `apt-get install curl`,
-// `command -v curl` or `curl --version` is none; a URL held only in a variable
-// (curl "$u") is therefore not seen either, like a program held in a variable.
+// is a curl or wget command with an http(s):// URL argument (or behind xargs), so
+// `apt-get install curl`, `command -v curl` or `curl --version` is none; a URL held only
+// in a variable (curl "$u") is therefore not seen either, like a program held in a
+// variable. sh -c and eval strings are scanned as run blocks of their own; any other
+// command with a curl or wget word and a URL (retry curl URL) is flagged, as the scan
+// cannot tell what it runs.
 function downloadsIn(run) {
   const lines = logicalLines(run);
-  return lines.flatMap((line, i) => {
-    const tokens = shellTokens(line);
-    return simpleCommands(tokens).flatMap((c) => {
-      const p = program(c.words);
-      const url = p && ["curl", "wget"].includes(p.name) && p.args.find((a) => /^https?:\/\//.test(a));
-      if (!url) return [];
-      const d = { line, url, problem: null };
-      if (c.after === "|" || c.after === "|&") return [{ ...d, problem: "is piped instead of written to a file" }];
-      const file = outputFile(p);
-      if (!file || file === "-") return [{ ...d, problem: "does not write to a named file" }];
-      if (tokens.slice(c.next).some((t) => "word" in t && t.word.includes(file))) {
-        return [{ ...d, problem: `is used on the download line before its sha256 check` }];
-      }
-      const check = SHA_CHECK.exec(lines[i + 1] ?? "");
-      if (!check || unquote(check[1]) !== file) {
-        return [{ ...d, problem: `is not checked with sha256sum -c on the line after the download of ${file}` }];
-      }
-      return [d];
-    });
-  });
+  return lines.flatMap((line, i) =>
+    shellTokens(line).flatMap((tokens, nested) => {
+      const cmds = simpleCommands(tokens);
+      return cmds.flatMap((c, k) => {
+        const p = program(c.words);
+        if (!p) return [];
+        const inner = shellString(p);
+        if (inner !== null) return downloadsIn(inner);
+        const urls = p.args.filter((a) => /^https?:\/\//.test(a));
+        if (!["curl", "wget"].includes(p.name)) {
+          const runs = !["echo", "printf"].includes(p.name) && p.args.find((a) => !a.includes("://") && ["curl", "wget"].includes(a.split("/").pop()));
+          return runs && urls.length ? [{ line, url: urls[0], problem: `runs ${runs} through ${p.name}, which the scan cannot read` }] : [];
+        }
+        if (!urls.length && !p.xargs) return [];
+        const d = { line, url: urls[0] ?? "", problem: null };
+        const bad = (problem) => [{ ...d, problem }];
+        if (urls.length > 1) return bad("fetches more than one URL; give each its own download");
+        if (c.after === "|" || c.after === "|&") return bad("is piped instead of written to a file");
+        const file = outputFile(p);
+        if (!file || file === "-" || /^[<>]\(/.test(file)) return bad("does not write to a named file");
+        if (nested) return bad("runs inside a command substitution; give it a line of its own");
+        if (c.after === "&") return bad("runs in the background, so its check can run before it ends");
+        if (!cmds.slice(k + 1).every(harmless)) return bad("is used on the download line before its sha256 check");
+        const check = SHA_CHECK.exec(lines[i + 1] ?? "");
+        if (!check || unquote(check[1]) !== file) {
+          return bad(`is not checked with sha256sum -c on the line after the download of ${file}`);
+        }
+        return [d];
+      });
+    }),
+  );
 }
 
 function workflowDownloads() {
@@ -305,6 +345,75 @@ test("the download scan ignores lines that download nothing and reads every outp
     assert.match(scanProblems(dl)[0], /not checked/, dl);
   }
   assert.match(scanProblems(`wget -qO - https://example.test/a.tgz > "$d/a.tgz"${SELF_CHECK}`)[0], /named file/);
+});
+
+test("the download scan keeps a command substitution inside the word it belongs to", () => {
+  const piped = ["is piped instead of written to a file"];
+  for (const run of [
+    'curl -sSfL -H "Authorization: Bearer $(cat "$RUNNER_TEMP/token")" https://example.test/a.tgz | tar -xz -C "$d"',
+    'curl -sSfL -A "fbx-$(uname -m)" https://example.test/a.tgz | tar -xz -C "$d"',
+    'curl -sSfL -A "x`uname -m`" https://example.test/a.tgz | tar -xz -C "$d"',
+  ]) {
+    assert.deepEqual(scanProblems(run), piped, run);
+  }
+  const archFile = 'curl -sSfL -o "$d/x-$(uname -m).tgz" https://example.test/a.tgz';
+  assert.match(scanProblems(`${archFile}\ntar -xzf "$d"/x-*.tgz`)[0], /not checked/);
+  assert.deepEqual(scanProblems(`${archFile}\necho "\${s}  $d/x-$(uname -m).tgz" | sha256sum -c -`), [null]);
+  assert.deepEqual(scanProblems('curl -sSfL -o >(tar -xz -C "$d") https://example.test/a.tgz'), ["does not write to a named file"]);
+  assert.deepEqual(scanProblems('wget -q -O >(tar -xz -C "$d") https://example.test/a.tgz'), ["does not write to a named file"]);
+});
+
+test("the download scan reads curl and wget behind time, nice, stdbuf, builtin, xargs, sh -c and eval", () => {
+  const piped = ["is piped instead of written to a file"];
+  for (const run of [
+    'sudo sh -c "cd /usr/local/bin && curl -sSfL https://example.test/a.tgz | tar -xz"',
+    "bash -ec 'curl -sSfL https://example.test/a.tgz | tar -xz -C /usr/local/bin'",
+    'bash -o pipefail -c "curl -sSfL https://example.test/a.tgz | tar -xz"',
+    'eval "curl -sSfL https://example.test/a.tgz | tar -xz"',
+    'time -p curl -sSfL https://example.test/a.tgz | tar -xz -C "$d"',
+    'nice -n 10 curl -sSfL https://example.test/a.tgz | tar -xz -C "$d"',
+    'nice -10 wget -qO- https://example.test/a.tgz | tar -xz -C "$d"',
+    'stdbuf -o L curl -sSfL https://example.test/a.tgz | tar -xz -C "$d"',
+    'builtin command curl -sSfL https://example.test/a.tgz | tar -xz -C "$d"',
+    "echo https://example.test/a.tgz | xargs curl -sSfL | tar -xz",
+    "echo https://example.test/a.tgz | xargs -n 1 -P 2 curl -sSfL | tar -xz",
+  ]) {
+    assert.deepEqual(scanProblems(run), piped, run);
+  }
+  assert.deepEqual(scanProblems('retry -t 3 -- curl -sSfL https://example.test/a.tgz | tar -xz -C "$d"'), [
+    "runs curl through retry, which the scan cannot read",
+  ]);
+});
+
+test("the download scan wants one URL per curl or wget command", () => {
+  for (const run of [
+    `curl -sSfL -o "$d/a.tgz" https://example.test/a.tgz -o "$d/b.tgz" https://example.test/b.tgz${SELF_CHECK}\ntar -xzf "$d/b.tgz"`,
+    `curl -sSfL -o "$d/a.tgz" https://example.test/a.tgz https://example.test/b.tgz > "$d/b.tgz"${SELF_CHECK}\ntar -xzf "$d/b.tgz"`,
+    `wget -q -O "$d/a.tgz" https://example.test/a.tgz https://example.test/b.tgz${SELF_CHECK}`,
+  ]) {
+    assert.deepEqual(scanProblems(run), ["fetches more than one URL; give each its own download"], run);
+  }
+});
+
+test("the download scan lets only echo, printf or exit follow a download on its line", () => {
+  const dl = 'curl -sSfL -o "$d/a.tgz" https://example.test/a.tgz';
+  for (const rest of [
+    ' && tar -xzf "${d}/a.tgz" -C "$d"',
+    ' && cd "$d" && tar -xzf a.tgz',
+    ' && mkdir -p "$d/x"',
+    ' && echo "$(tar -xzf "${d}/a.tgz")"',
+    ' || { cp "${d}/a.tgz" "$d/b.tgz"; exit 1; }',
+  ]) {
+    assert.deepEqual(scanProblems(dl + rest + SELF_CHECK), ["is used on the download line before its sha256 check"], rest);
+  }
+  assert.deepEqual(scanProblems(`${dl} &${SELF_CHECK}`), ["runs in the background, so its check can run before it ends"]);
+  for (const rest of [
+    ' || { echo "::error::could not download $d/a.tgz" >&2; exit 1; }',
+    ' && echo "downloaded $d/a.tgz"',
+  ]) {
+    assert.deepEqual(scanProblems(dl + rest + SELF_CHECK), [null], rest);
+  }
+  assert.deepEqual(scanProblems('curl -sSfL -o f https://example.test/a.tgz && echo fetched\necho "${s}  f" | sha256sum -c -'), [null]);
 });
 
 test("every curl or wget download in .github/workflows is sha256-checked before it is used", () => {
