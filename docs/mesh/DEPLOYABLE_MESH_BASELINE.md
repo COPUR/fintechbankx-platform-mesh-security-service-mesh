@@ -548,9 +548,10 @@ products catalog chart (open-products-catalog-service) does read two: its
 Deployment template checksums the synced DB Secrets with `lookup "v1" "Secret"`,
 and Helm aborts the render on the Forbidden answer, so that chart does not
 deploy with this Role until the lookup leaves the chart (fixture
-`secretLookups`). `helm-deploy.yml` refuses a chart that calls `lookup` in its
-validate job, before any credentials, because that job renders without a
-cluster and so never sees what `lookup` would return.
+`secretLookups`). `helm-deploy.yml` refuses a chart whose templates call
+`lookup` by name in its validate job, before any credentials, because that job
+renders without a cluster and so never sees what `lookup` would return; a
+`lookup` built through `tpl` is not caught (see Residual risk).
 
 ### Workload admission
 
@@ -636,11 +637,18 @@ non-expiring token for that account) and `target.creationPolicy` absent or
   needs terraform-modules `bind_platform_workflow_ref = true`; that defaults to
   `false` and its rollout is pending, so today any job in the service
   repository's GitHub environment can assume the deploy role and run `kubectl`
-  or `helm` directly. Within `helm-deploy.yml`, the validate job refuses a
-  render in which any container image is not
-  `<image-repository>@<image-digest>`; the accounts ledger chart (2db7a04) and
-  the products catalog chart render `repository:tag` and fail that check until
-  they use the digest. No admission-side image verification exists.
+  or `helm` directly. Within `helm-deploy.yml`, the validate job's render
+  guard is a check, not a control: it catches a chart whose install render
+  (`helm template`, no cluster) has an image tag or another digest than
+  `<image-repository>@<image-digest>`, or that calls `lookup` by name; the
+  accounts ledger chart (2db7a04) and the products catalog chart render
+  `repository:tag` and fail it until they use the digest. It does not stop a
+  chart written to render differently at deploy time: `helm upgrade` renders
+  again against the cluster, where `.Release.IsUpgrade`, `.Release.Revision`
+  and `.Capabilities` differ, and a `lookup` built through `tpl` passes the
+  word check. The durable control is admission in the service namespaces: a
+  policy requiring ECR images by digest plus image signature verification at
+  admission. Neither exists yet; it is the next proposal.
 - Services: a deploy group can still create a ClusterIP Service that selects a
   sibling's pods. ConfigMaps other than the trust anchors stay writable.
   `target.name` of an ExternalSecret is not restricted; what ESO does with an
