@@ -64,7 +64,7 @@ selected per workload, not per namespace.
 | NetworkPolicy | `generated/network-policies.yaml` | Default-deny, DNS, istiod 15012, node health 15020/15021, scraping, edge-derived ingress/egress, Aurora/MSK/VPC-endpoint CIDRs; Aurora egress keys on `app.kubernetes.io/name`, MSK egress on the name plus `app.kubernetes.io/component=service` (see "Database migration Jobs") |
 | Secrets | `k8s/platform/external-secrets/`, `deploy/kustomize/base/ingress-tls-externalsecret.yaml`, `deploy/kustomize/base/generated/externalsecret-admission.yaml` | `aws-secrets-manager` (IRSA SA `external-secrets`; conditions: namespaces labelled `fintechbankx.io/namespace-kind=service` and `observability`); `aws-secrets-manager-platform` (IRSA SA `external-secrets-platform`; conditions: `cert-manager`, `istio-ingress`, `identity`) for the internal CA, ingress TLS (`<env>/platform/ingress-tls`), corporate directory CA and Keycloak material; ValidatingAdmissionPolicy `fintechbankx-externalsecret-scope` + Deny binding: outside the platform-store namespaces an ExternalSecret must use `aws-secrets-manager` and read only `<env>/<slug>/` keys, where in a service namespace `<slug>` is its `app.kubernetes.io/name` label and one of that namespace's service accounts (payments holds four), and no remote key may end in `/db-import` (the operator import credential of terraform-modules `operator-db-access` is never synced into a cluster). Validator rule R10 checks the structure; the CEL runs only in a kube-apiserver |
 | Deploy RBAC | `generated/deploy-rbac.yaml` | Role and RoleBinding `fintechbankx-deploy` in each `kind: service` namespace for the group `fintechbankx:deploy:<namespace>` (terraform-modules `github-oidc` EKS access entry); Helm release verbs on the chart kinds, no Secrets; see "Deploy RBAC" |
-| Workload admission | `generated/workload-admission.yaml` | ValidatingAdmissionPolicies + Deny bindings in `kind: service` namespaces: `fintechbankx-service-pod-security` (no privileged, host namespaces, hostPath, hostPort; capabilities only NET_ADMIN/NET_RAW on `istio-init`), `fintechbankx-service-service-type` (ClusterIP, no externalIPs), `fintechbankx-deploy-trust-anchors` (deploy groups may not write the CA ConfigMaps); see "Workload admission" |
+| Workload admission | `generated/workload-admission.yaml` | ValidatingAdmissionPolicies + Deny bindings in `kind: service` namespaces: `fintechbankx-service-pod-security` (Pod Security baseline; the one exception is NET_ADMIN/NET_RAW on `istio-init` running `docker.io/istio/proxyv2`), `fintechbankx-service-service-type` (ClusterIP, no externalIPs), `fintechbankx-deploy-trust-anchors` (deploy groups may not write the CA ConfigMaps); see "Workload admission" |
 | PKI install | `deploy/cert-manager/` (versions, Helm values), `deploy/kustomize/platform-pki/<env>/`, `components/platform-params` | cert-manager and trust-manager installed by this repo before Istio; see "Platform PKI install" |
 | Internal TLS | `k8s/platform/cert-manager/` | ClusterIssuer `fintechbankx-internal-ca` (CA issuer; key pair synced by ExternalSecret from `<env>/platform/internal-ca` into ns `cert-manager`, no material in git); trust-manager Bundle `fintechbankx-internal-ca` -> ConfigMap `fintechbankx-internal-ca` (key `ca.crt`) in every namespace labelled `fintechbankx.io/namespace-kind` |
 | Corporate directory (prod only) | `deploy/kustomize/components/corporate-directory/` | Bundle `corporate-directory-ca` -> ConfigMap in `identity` (source: ExternalSecret from `<env>/platform/corporate-directory-ca`); ServiceEntry + NetworkPolicy for Keycloak -> `DIRECTORY_HOST:636` (LDAPS) |
@@ -560,12 +560,28 @@ adds three ValidatingAdmissionPolicies with Deny bindings and
 
 - `fintechbankx-service-pod-security`, on Pods and every pod-template kind
   (Deployments, ReplicaSets, StatefulSets, DaemonSets, Jobs, CronJobs) in
-  `kind: service` namespaces: no privileged container, no `hostNetwork`,
-  `hostPID` or `hostIPC`, no `hostPath` volume, no `hostPort`, and no added
-  capability except `NET_ADMIN` and `NET_RAW` on the `istio-init` init
-  container. Pod Security Admission labels are not used: Istio runs without
-  CNI, so `istio-init` needs those two capabilities and `baseline` would
-  refuse every injected pod.
+  `kind: service` namespaces: the Pod Security Standards `baseline` controls
+  (Kubernetes 1.31), at pod and container level wherever `baseline` checks
+  both. No privileged container, no `hostNetwork`, `hostPID` or `hostIPC`, no
+  `hostPath` volume, no `hostPort`; `seccompProfile.type` and
+  `appArmorProfile.type` only `RuntimeDefault` or `Localhost`, and
+  `container.apparmor.security.beta.kubernetes.io/*` annotations only
+  `runtime/default` or `localhost/*`; `seLinuxOptions.type` only
+  `container_t`, `container_init_t`, `container_kvm_t` or
+  `container_engine_t`, no `seLinuxOptions.user` or `role`; `procMount`
+  only `Default`; sysctls only from the `baseline` safe set; no Windows
+  `hostProcess`. Capabilities are stricter than `baseline`: none may be
+  added, except `NET_ADMIN` and `NET_RAW` on an init container named
+  `istio-init` whose image is in the repository the mesh installs,
+  `<global.hub>/proxyv2` from `deploy/istio/helm/istiod.values.yaml`
+  (`docker.io/istio/proxyv2`, any tag or digest). The pod annotation
+  `sidecar.istio.io/proxyImage` cannot move `istio-init` to another image.
+  Pod Security Admission labels are not used: Istio runs without CNI, so
+  `istio-init` needs those two capabilities and `baseline` would refuse every
+  injected pod. `tests/workload-admission.test.mjs` admits the containers
+  Istio 1.24.3's injection template renders with this mesh's values
+  (`istio-init`, and `istio-proxy` as a native sidecar or as a container),
+  taken from the template, not from a running injector.
 - `fintechbankx-service-service-type`: Services in `kind: service` namespaces
   are `ClusterIP` (headless included) without `spec.externalIPs`. No
   LoadBalancer or NodePort, and no externalIPs, which kube-proxy routes
@@ -596,8 +612,9 @@ non-expiring token for that account) and `target.creationPolicy` absent or
 - With the policies, a deploy group can still create pods that mount any
   Secret of its namespace or run as any ServiceAccount of it (and use that
   account's IRSA role), and so read what it cannot `get`. Kubernetes RBAC
-  cannot prevent that. A container named `istio-init` may add `NET_ADMIN` and
-  `NET_RAW` in its own pod's network namespace.
+  cannot prevent that. An init container named `istio-init` that runs the
+  Istio proxyv2 image may add `NET_ADMIN` and `NET_RAW` in its own pod's
+  network namespace, with any arguments.
 - A namespace is shared by every service in it, and the group is per
   namespace: payments holds four services and open-finance seven, each
   released from its own repository with its own deploy role, all in the same

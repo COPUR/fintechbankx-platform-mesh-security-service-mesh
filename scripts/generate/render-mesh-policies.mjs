@@ -1255,13 +1255,19 @@ function deployRbac(contract) {
 // What the deploy Role cannot see: the inside of the objects it lets a
 // service pipeline write. Three ValidatingAdmissionPolicies (Deny bindings,
 // failurePolicy Fail) for kind: service namespaces:
-// - pod security: no privileged container, hostNetwork/hostPID/hostIPC,
-//   hostPath volume or hostPort, and no added capability except NET_ADMIN and
-//   NET_RAW on the istio-init init container (Istio runs without CNI, so
-//   Pod Security Admission baseline would refuse every injected pod). Checked
-//   on Pods (after sidecar injection) and on every pod-template kind, so a bad
-//   Deployment, Job or CronJob fails at helm upgrade, not later in its
-//   ReplicaSet;
+// - pod security: Pod Security baseline with one exception. No privileged
+//   container, hostNetwork/hostPID/hostIPC, hostPath volume or hostPort, no
+//   added capability except NET_ADMIN and NET_RAW on the istio-init init
+//   container running the proxyv2 image deploy/istio installs (Istio runs
+//   without CNI, so Pod Security Admission baseline would refuse every
+//   injected pod; a pod annotation sidecar.istio.io/proxyImage could otherwise
+//   point istio-init at any image), and the other baseline controls at pod and
+//   container level: seccomp and AppArmor not Unconfined (AppArmor annotations
+//   too), SELinux type only container_t, container_init_t, container_kvm_t or
+//   container_engine_t and no user or role, procMount Default, sysctls only
+//   from the baseline safe set, no Windows HostProcess. Checked on Pods (after
+//   sidecar injection) and on every pod-template kind, so a bad Deployment,
+//   Job or CronJob fails at helm upgrade, not later in its ReplicaSet;
 // - Service type: ClusterIP only (headless included), no externalIPs
 //   (CVE-2020-8554: kube-proxy routes them cluster-wide), no LoadBalancer or
 //   NodePort;
@@ -1272,6 +1278,41 @@ function deployRbac(contract) {
 const SERVICE_NS_SELECTOR = { matchLabels: { 'fintechbankx.io/namespace-kind': 'service' } };
 const TRUST_ANCHOR_CONFIGMAPS = ['rds-ca-bundle', 'fintechbankx-internal-ca', 'istio-ca-root-cert', 'kube-root-ca.crt'];
 const ISTIO_INIT_CAPABILITIES = ['NET_ADMIN', 'NET_RAW'];
+// Pod Security Standards, baseline (Kubernetes 1.31 policy, EKS 1.31).
+const BASELINE_PROFILE_TYPES = ['RuntimeDefault', 'Localhost'];
+const BASELINE_SELINUX_TYPES = ['', 'container_t', 'container_init_t', 'container_kvm_t', 'container_engine_t'];
+const BASELINE_SAFE_SYSCTLS = [
+  'kernel.shm_rmid_forced',
+  'net.ipv4.ip_local_port_range',
+  'net.ipv4.ip_unprivileged_port_start',
+  'net.ipv4.tcp_syncookies',
+  'net.ipv4.ping_group_range',
+  'net.ipv4.ip_local_reserved_ports',
+  'net.ipv4.tcp_keepalive_time',
+  'net.ipv4.tcp_fin_timeout',
+  'net.ipv4.tcp_keepalive_intvl',
+  'net.ipv4.tcp_keepalive_probes',
+];
+const APPARMOR_ANNOTATION_PREFIX = 'container.apparmor.security.beta.kubernetes.io/';
+
+// The repository of the image the injected istio-init runs: <global.hub>/<global.proxy_init.image>
+// from deploy/istio (istiod chart default proxy_init.image: proxyv2). Any tag or digest.
+function istioProxyRepository() {
+  const dir = join(repoRoot, 'deploy', 'istio', 'helm');
+  const values = YAML.parse(readFileSync(join(dir, 'istiod.values.yaml'), 'utf8'));
+  for (const env of ['dev', 'staging', 'prod']) {
+    const over = YAML.parse(readFileSync(join(dir, 'env', env, 'istiod.values.yaml'), 'utf8')) || {};
+    if (over.global?.hub !== undefined || over.global?.proxy_init !== undefined) {
+      throw new Error(`deploy/istio/helm/env/${env}/istiod.values.yaml overrides the proxy image; the istio-init admission exception is generated from the base values only`);
+    }
+  }
+  const hub = values.global?.hub;
+  if (!hub) throw new Error('deploy/istio/helm/istiod.values.yaml has no global.hub');
+  return `${hub}/${values.global?.proxy_init?.image ?? 'proxyv2'}`;
+}
+// A CEL single-quoted RE2 literal: every regex metacharacter escaped with a backslash, which
+// CEL itself needs doubled.
+const celRegexLiteral = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\\\$&');
 
 function admissionPolicy(name, purpose, spec) {
   return [
@@ -1300,11 +1341,46 @@ function workloadAdmission() {
   const added = `${sc} && has(c.securityContext.capabilities) && has(c.securityContext.capabilities.add) && c.securityContext.capabilities.add.size() > 0`;
   const privileged = `${sc} && ${isTrue('c.securityContext.privileged')}`;
   const hostPort = 'has(c.ports) && c.ports.exists(p, has(p.hostPort) && p.hostPort != 0)';
-  const istioInitOnly = `c.name == 'istio-init' && c.securityContext.capabilities.add.all(k, k in [${ISTIO_INIT_CAPABILITIES.map(cel).join(', ')}])`;
+  const istioRepo = istioProxyRepository();
+  const istioImage = `has(c.image) && c.image.matches('^${celRegexLiteral(istioRepo)}(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(@sha256:[0-9a-f]{64})?$')`;
+  const istioInitOnly =
+    `c.name == 'istio-init' && ${istioImage} && ` +
+    `c.securityContext.capabilities.add.all(k, k in [${ISTIO_INIT_CAPABILITIES.map(cel).join(', ')}])`;
+  const list = (xs) => `[${xs.map(cel).join(', ')}]`;
+  // Baseline controls that apply to the pod securityContext and to every container's:
+  // bad(s) is true when securityContext s breaks the control. The message names "pod"
+  // and/or the containers.
+  const psc = 'variables.spec.securityContext';
+  const podAndContainers = (bad, message, { pod = true } = {}) => {
+    const podBad = `has(${psc}) && (${bad(psc)})`;
+    const ctrBad = `${sc} && (${bad('c.securityContext')})`;
+    return {
+      expression: pod ? `!(${podBad}) && !variables.all.exists(c, ${ctrBad})` : `!variables.all.exists(c, ${ctrBad})`,
+      messageExpression:
+        `${cel(`${message} in service namespaces: `)} + ` +
+        (pod
+          ? `(((${podBad}) ? ['pod'] : []) + variables.all.filter(c, ${ctrBad}).map(c, c.name)).join(', ')`
+          : `${names(`variables.all.filter(c, ${ctrBad})`)}`),
+      reason: 'Forbidden',
+    };
+  };
+  const profileNotAllowed = (field) => (s) => `has(${s}.${field}) && has(${s}.${field}.type) && !(${s}.${field}.type in ${list(BASELINE_PROFILE_TYPES)})`;
+  const seLinuxNotAllowed = (s) =>
+    `has(${s}.seLinuxOptions) && (` +
+    `(has(${s}.seLinuxOptions.type) && !(${s}.seLinuxOptions.type in ${list(BASELINE_SELINUX_TYPES)})) || ` +
+    `(has(${s}.seLinuxOptions.user) && ${s}.seLinuxOptions.user != '') || ` +
+    `(has(${s}.seLinuxOptions.role) && ${s}.seLinuxOptions.role != ''))`;
+  const hostProcess = (s) => `has(${s}.windowsOptions) && ${isTrue(`${s}.windowsOptions.hostProcess`)}`;
+  const procMount = (s) => `has(${s}.procMount) && ${s}.procMount != 'Default'`;
+  const apparmorAnnotationBad = (k) =>
+    `${k}.startsWith(${cel(APPARMOR_ANNOTATION_PREFIX)}) && !(variables.annotations[${k}] == 'runtime/default' || variables.annotations[${k}].startsWith('localhost/'))`;
+  const safeSysctl = `x.name in ${list(BASELINE_SAFE_SYSCTLS)}`;
+  const sysctls = `has(${psc}) && has(${psc}.sysctls)`;
   const podSecurity = admissionPolicy(
     'fintechbankx-service-pod-security',
-    'Pods and pod templates in service namespaces: no privileged container, host namespace, hostPath volume or hostPort, ' +
-      'and no added capability except NET_ADMIN and NET_RAW on the istio-init init container.',
+    'Pods and pod templates in service namespaces: Pod Security baseline (no privileged container, host namespace, hostPath ' +
+      'volume or hostPort; seccomp and AppArmor not Unconfined; SELinux, procMount, sysctls and Windows HostProcess as baseline), ' +
+      `and no added capability except NET_ADMIN and NET_RAW on the istio-init init container running ${istioRepo}.`,
     {
       matchConstraints: {
         resourceRules: [
@@ -1328,6 +1404,13 @@ function workloadAdmission() {
             '(has(variables.spec.ephemeralContainers) ? variables.spec.ephemeralContainers : [])',
         },
         { name: 'all', expression: 'variables.init + variables.main' },
+        {
+          name: 'annotations',
+          expression:
+            "object.kind == 'Pod' ? (has(object.metadata.annotations) ? object.metadata.annotations : {}) : " +
+            "object.kind == 'CronJob' ? (has(object.spec.jobTemplate.spec.template.metadata) && has(object.spec.jobTemplate.spec.template.metadata.annotations) ? object.spec.jobTemplate.spec.template.metadata.annotations : {}) : " +
+            '(has(object.spec.template.metadata) && has(object.spec.template.metadata.annotations) ? object.spec.template.metadata.annotations : {})',
+        },
       ],
       validations: [
         {
@@ -1358,10 +1441,32 @@ function workloadAdmission() {
         {
           expression: `variables.init.all(c, !(${added}) || ${istioInitOnly})`,
           messageExpression:
-            `'only the istio-init init container may add capabilities, and only ${ISTIO_INIT_CAPABILITIES.join(' and ')}: ' + ` +
+            `'only the istio-init init container running ${istioRepo} may add capabilities, and only ${ISTIO_INIT_CAPABILITIES.join(' and ')}: ' + ` +
             names(`variables.init.filter(c, (${added}) && !(${istioInitOnly}))`),
           reason: 'Forbidden',
         },
+        podAndContainers(profileNotAllowed('seccompProfile'), 'seccompProfile.type must be RuntimeDefault or Localhost'),
+        podAndContainers(profileNotAllowed('appArmorProfile'), 'appArmorProfile.type must be RuntimeDefault or Localhost'),
+        {
+          expression: `!variables.annotations.exists(k, ${apparmorAnnotationBad('k')})`,
+          messageExpression:
+            `'AppArmor annotations must be runtime/default or localhost/<profile> in service namespaces: ' + ` +
+            `variables.annotations.filter(k, ${apparmorAnnotationBad('k')}).join(', ')`,
+          reason: 'Forbidden',
+        },
+        podAndContainers(
+          seLinuxNotAllowed,
+          `seLinuxOptions may set type only to ${BASELINE_SELINUX_TYPES.filter(Boolean).slice(0, -1).join(', ')} or ${BASELINE_SELINUX_TYPES.at(-1)}, and no user or role,`,
+        ),
+        podAndContainers(procMount, 'procMount must be Default', { pod: false }),
+        {
+          expression: `!(${sysctls}) || ${psc}.sysctls.all(x, ${safeSysctl})`,
+          messageExpression:
+            `'sysctls outside the Pod Security baseline safe set are not allowed in service namespaces: ' + ` +
+            `${psc}.sysctls.filter(x, !(${safeSysctl})).map(x, x.name).join(', ')`,
+          reason: 'Forbidden',
+        },
+        podAndContainers(hostProcess, 'Windows HostProcess is not allowed'),
       ],
     },
   );
