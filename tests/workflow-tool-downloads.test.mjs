@@ -1,14 +1,15 @@
 // Tool downloads in this repository's workflows (DevSecOps should-fix, 2026-10-17):
-//   1. every curl or wget download in .github/workflows/*.yml writes to a file (never
-//      piped into tar), and the next line of the same run block that uses that file is
-//      `echo "<sha256>  <file>" | sha256sum -c -`, so nothing is extracted unchecked.
+//   1. every curl or wget download in .github/workflows/*.yml (a curl or wget command
+//      with an http(s):// URL argument) writes to a named file (never piped into tar),
+//      nothing else on its own logical line uses that file, and the next logical line
+//      is `echo "<sha256>  <file>" | sha256sum -c -`, so nothing is extracted unchecked.
 //      UNCHECKED_ALLOWED lists the downloads that have no sha256 yet. It may only shrink:
 //      the only download it may ever hold is the mesh repository's helm download;
 //   2. each install step runs with stub uname, curl, sha256sum, tar and sudo on PATH for
-//      x86_64 and aarch64 (asset and sha256 for that architecture, checked before tar),
-//      for riscv64 (::error::, nothing downloaded), with a checksum mismatch (nothing
-//      extracted) and with a version other than the pinned one (::error::, nothing
-//      downloaded).
+//      x86_64 and aarch64 (asset and sha256 for that architecture, checked before tar,
+//      and only members the real archive holds extracted), for riscv64 (::error::,
+//      nothing downloaded), with a checksum mismatch (nothing extracted) and with a
+//      version other than the pinned one (::error::, nothing downloaded).
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -32,8 +33,6 @@ after(() => fs.rmSync(tmpRoot, { recursive: true, force: true }));
 const MAY_ONLY_SHRINK_TO = [{ file: "mesh-manifests.yml", step: "Install validation tools", url: "https://get.helm.sh/" }];
 const UNCHECKED_ALLOWED = [{ file: "mesh-manifests.yml", step: "Install validation tools", url: "https://get.helm.sh/" }];
 
-const DOWNLOAD = /(^|[\s;&|(!`])(curl|wget)\s/;
-const PIPE = /(^|[^|])\|(?!\|)/;
 const SHA_CHECK = /^echo\s+"(?:[0-9a-f]{64}|\$\{?\w+\}?)\s\s(.+)"\s*\|\s*sha256sum\s+-c\s+-$/;
 const unquote = (s) => s.replace(/["']/g, "");
 
@@ -45,25 +44,154 @@ const logicalLines = (run) =>
     .map((l) => l.trim())
     .filter((l) => l && !l.startsWith("#"));
 
-// Every download in one run block, each with the reason it is unsafe (or null).
+// One logical line -> shell words ({ word }, quotes and backslashes removed) and
+// operators ({ op }). $( ), <( ), >( ) and backticks open a nested command, also inside
+// double quotes; `{` and `}` as whole words are operators; a redirection such as 2>&1
+// stays one word; an unquoted # at the start of a word ends the line.
+function shellTokens(line) {
+  const tokens = [];
+  const open = []; // open command substitutions: { kind, dq } with dq the state outside
+  let word = null;
+  let dq = false;
+  const add = (s) => (word = (word ?? "") + s);
+  const flush = () => {
+    if (word !== null) tokens.push(word === "{" || word === "}" ? { op: word } : { word });
+    word = null;
+  };
+  const op = (o) => (flush(), tokens.push({ op: o }));
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    const two = line.slice(i, i + 2);
+    const top = open[open.length - 1];
+    if (c === "\\") {
+      const n = line[++i] ?? "";
+      add(dq && !'"$`\\'.includes(n) ? c + n : n);
+    } else if (c === "'" && !dq) {
+      const end = line.indexOf("'", i + 1);
+      add(line.slice(i + 1, end < 0 ? line.length : end));
+      i = end < 0 ? line.length : end;
+    } else if (c === '"') {
+      dq = !dq;
+      add("");
+    } else if (two === "$(" || (!dq && (two === "<(" || two === ">("))) {
+      op("$(");
+      open.push({ kind: "$(", dq });
+      dq = false;
+      i++;
+    } else if (c === "`") {
+      op("`");
+      if (top?.kind === "`" && !dq) {
+        dq = open.pop().dq;
+      } else {
+        open.push({ kind: "`", dq });
+        dq = false;
+      }
+    } else if (c === ")" && !dq && top?.kind === "$(") {
+      op(")");
+      dq = open.pop().dq;
+    } else if (dq) {
+      add(c);
+    } else if (/\s/.test(c)) {
+      flush();
+    } else if (c === "#" && word === null) {
+      break;
+    } else if (c === ">" || c === "<" || two === "&>") {
+      add(two === "&>" || two === ">&" || two === "<&" ? two : c);
+      if (two === "&>" || two === ">&" || two === "<&") i++;
+    } else if (["&&", "||", ";;", "|&"].includes(two)) {
+      op(two);
+      i++;
+    } else if (";&|()".includes(c)) {
+      op(c);
+    } else {
+      add(c);
+    }
+  }
+  flush();
+  return tokens;
+}
+
+// Logical line -> its simple commands: the words of each, the operator after it and the
+// index of the first token after it.
+function simpleCommands(tokens) {
+  const cmds = [];
+  let words = [];
+  tokens.forEach((t, k) => {
+    if ("word" in t) return void words.push(t.word);
+    if (words.length) cmds.push({ words, after: t.op, next: k + 1 });
+    words = [];
+  });
+  if (words.length) cmds.push({ words, after: null, next: tokens.length });
+  return cmds;
+}
+
+// The program a simple command runs, past assignments, the keywords that may start a
+// command and the wrappers sudo, env, timeout and command; written as curl, /usr/bin/curl,
+// \curl, "curl" or 'curl' it is curl. null when it runs nothing (command -v curl). A
+// program held in a variable ("$CURL") is out of scope: the scan cannot see it.
+const ASSIGNMENT = /^[A-Za-z_]\w*\+?=/;
+const KEYWORDS = new Set(["!", "if", "then", "else", "elif", "do", "while", "until", "time", "exec", "nohup"]);
+function program(words) {
+  const w = [...words];
+  const skipOptions = (withValue) => {
+    while (w.length && w[0].startsWith("-")) if (withValue.test(w.shift())) w.shift();
+  };
+  for (;;) {
+    while (w.length && (ASSIGNMENT.test(w[0]) || KEYWORDS.has(w[0]))) w.shift();
+    if (!w.length) return null;
+    const name = w[0].split("/").pop();
+    if (!["sudo", "env", "timeout", "command"].includes(name)) return { name, args: w.slice(1) };
+    w.shift();
+    if (name === "sudo") {
+      skipOptions(/^-[ugpCDhrtTU]$/);
+    } else if (name === "env") {
+      while (w.length && (w[0].startsWith("-") || ASSIGNMENT.test(w[0]))) if (/^-[uCS]$/.test(w.shift())) w.shift();
+    } else if (name === "timeout") {
+      skipOptions(/^-[sk]$/);
+      w.shift(); // the duration
+    } else {
+      if (w.length && /^-\w*[vV]/.test(w[0])) return null;
+      skipOptions(/^$/);
+    }
+  }
+}
+
+// The file a curl (-o f, --output f, --output=f, -sSfLo f) or wget (-O f, -qO f,
+// --output-document f, --output-document=f) download writes, or null.
+function outputFile({ name, args }) {
+  const [short, long] = name === "curl" ? [/^-[A-Za-z0-9]*o$/, "--output"] : [/^-[A-Za-z0-9]*O$/, "--output-document"];
+  for (let k = 0; k < args.length; k++) {
+    if (args[k].startsWith(`${long}=`)) return args[k].slice(long.length + 1);
+    if (args[k] === long || short.test(args[k])) return args[k + 1] ?? null;
+  }
+  return null;
+}
+
+// Every download in one run block, each with the reason it is unsafe (or null). A download
+// is a curl or wget command with an http(s):// URL argument, so `apt-get install curl`,
+// `command -v curl` or `curl --version` is none; a URL held only in a variable
+// (curl "$u") is therefore not seen either, like a program held in a variable.
 function downloadsIn(run) {
   const lines = logicalLines(run);
   return lines.flatMap((line, i) => {
-    const m = DOWNLOAD.exec(line);
-    if (!m) return [];
-    const rest = line.slice(m.index + m[0].length);
-    const url = (rest.match(/https?:\/\/[^\s"']+/) ?? [""])[0];
-    const d = { line, url, problem: null };
-    if (PIPE.test(rest)) return [{ ...d, problem: "is piped instead of written to a file" }];
-    const out = rest.match(m[2] === "curl" ? /(?:^|\s)(?:-o|--output)\s+("[^"]+"|'[^']+'|\S+)/ : /(?:^|\s)(?:-O|--output-document)\s+("[^"]+"|'[^']+'|\S+)/);
-    if (!out) return [{ ...d, problem: "does not write to a named file" }];
-    const file = unquote(out[1]);
-    const next = lines.slice(i + 1).find((l) => unquote(l).includes(file));
-    const check = next && SHA_CHECK.exec(next);
-    if (!check || unquote(check[1]) !== file) {
-      return [{ ...d, problem: `is not checked with sha256sum -c before ${file} is next used` }];
-    }
-    return [d];
+    const tokens = shellTokens(line);
+    return simpleCommands(tokens).flatMap((c) => {
+      const p = program(c.words);
+      const url = p && ["curl", "wget"].includes(p.name) && p.args.find((a) => /^https?:\/\//.test(a));
+      if (!url) return [];
+      const d = { line, url, problem: null };
+      if (c.after === "|" || c.after === "|&") return [{ ...d, problem: "is piped instead of written to a file" }];
+      const file = outputFile(p);
+      if (!file || file === "-") return [{ ...d, problem: "does not write to a named file" }];
+      if (tokens.slice(c.next).some((t) => "word" in t && t.word.includes(file))) {
+        return [{ ...d, problem: `is used on the download line before its sha256 check` }];
+      }
+      const check = SHA_CHECK.exec(lines[i + 1] ?? "");
+      if (!check || unquote(check[1]) !== file) {
+        return [{ ...d, problem: `is not checked with sha256sum -c on the line after the download of ${file}` }];
+      }
+      return [d];
+    });
   });
 }
 
@@ -99,6 +227,86 @@ test("the download scan flags piped, unchecked and late-checked downloads and pa
   assert.deepEqual(problem('curl -sSfL -o "$d/a.tgz" https://example.test/a.tgz || exit 1\necho "${s}  $d/a.tgz" | sha256sum -c -'), [null]);
 });
 
+const SELF_CHECK = '\necho "${s}  $d/a.tgz" | sha256sum -c -';
+const scanProblems = (run) => downloadsIn(run).map((d) => d.problem);
+
+test("the download scan flags a use of the file on the download line and wants the check on the very next line", () => {
+  for (const use of [
+    ' && tar -xzf "$d/a.tgz" -C "$d"',
+    '; tar -xzf "$d/a.tgz" -C "$d"',
+    ' && tar -xzf "$d/a.tgz" -C "$d" && sudo install "$d/a" /usr/local/bin/a',
+    ' || cp "$d/a.tgz" "$d/b.tgz"',
+  ]) {
+    const run = `curl -sSfL -o "$d/a.tgz" https://example.test/a.tgz${use}${SELF_CHECK}`;
+    assert.deepEqual(scanProblems(run), ["is used on the download line before its sha256 check"], run);
+  }
+  assert.deepEqual(scanProblems(`wget -q -O "$d/a.tgz" https://example.test/a.tgz; tar -xzf "$d/a.tgz"${SELF_CHECK}`), [
+    "is used on the download line before its sha256 check",
+  ]);
+  assert.match(scanProblems(`curl -sSfL -o "$d/a.tgz" https://example.test/a.tgz\nmkdir -p "$d/x"${SELF_CHECK}`)[0], /not checked/);
+  assert.deepEqual(scanProblems(`curl -sSfL -o "$d/a.tgz" https://example.test/a.tgz && echo fetched\n\n# verify it${SELF_CHECK}`), [null]);
+});
+
+test("the download scan sees curl and wget however the command is spelled or wrapped", () => {
+  const piped = ["is piped instead of written to a file"];
+  for (const cmd of [
+    "/usr/bin/curl",
+    "\\curl",
+    '"curl"',
+    "'curl'",
+    '"/usr/bin/curl"',
+    "HTTPS_PROXY=http://proxy.test:3128 curl",
+    "timeout 60 curl",
+    "timeout -s KILL 60 curl",
+    "command curl",
+    "env -i PATH=/usr/bin curl",
+    "sudo curl",
+    "sudo -u runner -E curl",
+    "sudo env A=1 timeout 30 curl",
+    "! curl",
+    "if curl",
+  ]) {
+    assert.deepEqual(scanProblems(`${cmd} -sSfL https://example.test/a.tgz | tar -xz -C "$d"`), piped, cmd);
+  }
+  assert.deepEqual(scanProblems('/usr/bin/wget -qO- https://example.test/a.tgz | tar -xz -C "$d"'), piped);
+  assert.deepEqual(scanProblems('{ curl -sSfL https://example.test/a.tgz | tar -xz -C "$d"; }'), piped);
+  for (const run of [
+    "x=`curl -sSfL https://example.test/a.tgz`",
+    'x="$(curl -sSfL https://example.test/a.tgz)"',
+    'tar -xz -C "$d" < <(curl -sSfL https://example.test/a.tgz)',
+    '{ curl -sSfL https://example.test/a.tgz; } > "$d/a.tgz"',
+  ]) {
+    assert.deepEqual(scanProblems(run), ["does not write to a named file"], run);
+  }
+  assert.deepEqual(scanProblems(`/usr/bin/curl -sSfL -o "$d/a.tgz" https://example.test/a.tgz${SELF_CHECK}`), [null]);
+});
+
+test("the download scan ignores lines that download nothing and reads every output-file form", () => {
+  for (const run of [
+    "sudo apt-get install -y --no-install-recommends curl jq",
+    'command -v curl >/dev/null || { echo "::error::curl missing"; exit 1; }',
+    "curl --version",
+    "wget --help",
+    'echo "fetching with curl then verifying"',
+    "kubectl version --client # unlike curl here",
+  ]) {
+    assert.deepEqual(scanProblems(run), [], run);
+  }
+  for (const dl of [
+    'curl -sSfLo "$d/a.tgz" https://example.test/a.tgz',
+    'curl -sSfL --output "$d/a.tgz" https://example.test/a.tgz',
+    'curl -sSfL --output="$d/a.tgz" https://example.test/a.tgz',
+    'wget -O "$d/a.tgz" https://example.test/a.tgz',
+    'wget -qO "$d/a.tgz" https://example.test/a.tgz',
+    'wget -q --output-document "$d/a.tgz" https://example.test/a.tgz',
+    'wget -q --output-document="$d/a.tgz" https://example.test/a.tgz',
+  ]) {
+    assert.deepEqual(scanProblems(dl + SELF_CHECK), [null], dl);
+    assert.match(scanProblems(dl)[0], /not checked/, dl);
+  }
+  assert.match(scanProblems(`wget -qO - https://example.test/a.tgz > "$d/a.tgz"${SELF_CHECK}`)[0], /named file/);
+});
+
 test("every curl or wget download in .github/workflows is sha256-checked before it is used", () => {
   const found = workflowDownloads();
   for (const step of ["Install gitleaks", "Install validation tools"]) {
@@ -126,20 +334,57 @@ test("the unchecked-download allowlist only shrinks and holds no stale entry", (
 
 // --- 2. stubbed runs -----------------------------------------------------------------
 
-// Stubs that log their calls. curl writes its -o file, sha256sum exits shaExit, tar
-// creates each member it is asked for (basename) in its -C directory, sudo only logs.
+// Members of each pinned release asset, as tar -tzf lists them on the real archive.
+const ARCHIVE_MEMBERS = {
+  "gitleaks_8.24.3_linux_x64.tar.gz": ["gitleaks", "LICENSE", "README.md"],
+  "gitleaks_8.24.3_linux_arm64.tar.gz": ["gitleaks", "LICENSE", "README.md"],
+  "kubeconform-linux-amd64.tar.gz": ["kubeconform", "LICENSE"],
+  "kubeconform-linux-arm64.tar.gz": ["kubeconform", "LICENSE"],
+  "kustomize_v5.5.0_linux_amd64.tar.gz": ["kustomize"],
+  "kustomize_v5.5.0_linux_arm64.tar.gz": ["kustomize"],
+  "istioctl-1.24.3-linux-amd64.tar.gz": ["istioctl"],
+  "istioctl-1.24.3-linux-arm64.tar.gz": ["istioctl"],
+  "helm-v3.16.3-linux-amd64.tar.gz": ["linux-amd64/helm", "linux-amd64/LICENSE", "linux-amd64/README.md"],
+  "helm-v3.16.3-linux-arm64.tar.gz": ["linux-arm64/helm", "linux-arm64/LICENSE", "linux-arm64/README.md"],
+};
+
+// Stubs that log their calls. curl writes the URL's asset name to its -o file,
+// sha256sum exits shaExit, sudo only logs. tar knows the members of each asset in
+// ARCHIVE_MEMBERS: it creates the members it is asked for (all when none is named) in
+// its -C directory after --strip-components, and like GNU tar it exits 2 with "Not found
+// in archive" for a member the archive does not hold.
 function stubs(arch, shaExit = 0) {
   const bin = fs.mkdtempSync(path.join(tmpRoot, "bin-"));
   const log = path.join(bin, "calls.log");
   const write = (name, body) => fs.writeFileSync(path.join(bin, name), `#!/usr/bin/env bash\n${body}\n`, { mode: 0o755 });
   write("uname", `[ "$1" = "-m" ] && echo ${arch} || echo Linux`);
-  write("curl", `echo "curl $*" >> "${log}"; out=""; while [ $# -gt 0 ]; do [ "$1" = "-o" ] && out="$2"; shift; done; [ -n "$out" ] && echo fake > "$out"; exit 0`);
+  write(
+    "curl",
+    `echo "curl $*" >> "${log}"; out=""; url=""
+while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift ;; http://*|https://*) url="$1" ;; esac; shift; done
+[ -n "$out" ] && printf '%s\\n' "\${url##*/}" > "$out"; exit 0`,
+  );
   write("sha256sum", `echo "sha256sum $* <<$(cat)" >> "${log}"; exit ${shaExit}`);
+  const held = Object.entries(ARCHIVE_MEMBERS).map(([asset, members]) => `  ${asset}) held=(${members.join(" ")}) ;;`);
   write(
     "tar",
-    `echo "tar $*" >> "${log}"; dir=""; members=()
-while [ $# -gt 0 ]; do case "$1" in -C) dir="$2"; shift 2 ;; -xzf|-f) shift 2 ;; -*) shift ;; *) members+=("$1"); shift ;; esac; done
-for m in "\${members[@]}"; do b="\${m##*/}"; printf '#!/bin/sh\\necho "%s stub"\\n' "$b" > "$dir/$b"; chmod +x "$dir/$b"; done`,
+    `echo "tar $*" >> "${log}"; dir=.; file=""; strip=0; members=()
+while [ $# -gt 0 ]; do case "$1" in -C) dir="$2"; shift 2 ;; --strip-components=*) strip="\${1#*=}"; shift ;; -f|-*f) file="$2"; shift 2 ;; -*) shift ;; *) members+=("$1"); shift ;; esac; done
+case "$(cat "$file" 2>/dev/null)" in
+${held.join("\n")}
+  *) echo "tar: $file: Cannot open: not a release asset this stub knows" >&2; exit 2 ;;
+esac
+[ \${#members[@]} -gt 0 ] || members=("\${held[@]}")
+status=0
+for m in "\${members[@]}"; do
+  found=""; for h in "\${held[@]}"; do [ "$h" = "$m" ] && found=1; done
+  if [ -z "$found" ]; then echo "tar: $m: Not found in archive" >&2; status=2; continue; fi
+  out="$m"; for ((k = 0; k < strip; k++)); do case "$out" in */*) out="\${out#*/}" ;; *) out="" ;; esac; done
+  [ -n "$out" ] || continue
+  mkdir -p "$dir/$(dirname "$out")"; printf '#!/bin/sh\\necho "%s stub"\\n' "\${out##*/}" > "$dir/$out"; chmod +x "$dir/$out"
+done
+[ "$status" -eq 0 ] || echo "tar: Exiting with failure status due to previous errors" >&2
+exit "$status"`,
   );
   write("sudo", `echo "sudo $*" >> "${log}"`);
   return { bin, log: () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "") };
@@ -163,6 +408,39 @@ function runStep(run, env, stubBin, files = {}) {
   const ghPathLines = fs.readFileSync(ghPath, "utf8").split("\n").filter(Boolean);
   return { status: res.status, out: res.stdout + res.stderr, runnerTemp: path.join(dir, "runner-temp"), path: ghPathLines };
 }
+
+// [asset, tar arguments before -C is added, the file it creates or null when tar fails]
+const STUB_TAR_CASES = [
+  ["gitleaks_8.24.3_linux_x64.tar.gz", "gitleaks", "gitleaks"],
+  ["gitleaks_8.24.3_linux_arm64.tar.gz", "gitleaks_8.24.3/gitleaks", null],
+  ["kubeconform-linux-amd64.tar.gz", "kubeconform", "kubeconform"],
+  ["kubeconform-linux-arm64.tar.gz", "./kubeconform", null],
+  ["kustomize_v5.5.0_linux_amd64.tar.gz", "kustomize", "kustomize"],
+  ["kustomize_v5.5.0_linux_arm64.tar.gz", "kustomize_v5.5.0/kustomize", null],
+  ["istioctl-1.24.3-linux-amd64.tar.gz", "istioctl", "istioctl"],
+  ["istioctl-1.24.3-linux-arm64.tar.gz", "./istioctl", null],
+  ["helm-v3.16.3-linux-amd64.tar.gz", "--strip-components=1 linux-amd64/helm", "helm"],
+  ["helm-v3.16.3-linux-arm64.tar.gz", "--strip-components=1 linux-amd64/helm", null],
+  ["helm-v3.16.3-linux-arm64.tar.gz", "--strip-components=1 helm", null],
+];
+
+test("the stub tar extracts only the members the real release archive holds", () => {
+  for (const [asset, args, creates] of STUB_TAR_CASES) {
+    const s = stubs("x86_64");
+    const r = runStep(
+      `mkdir -p "$RUNNER_TEMP/x"\ncurl -sSfL -o "$RUNNER_TEMP/a.tgz" https://example.test/r/${asset}\ntar -xzf "$RUNNER_TEMP/a.tgz" -C "$RUNNER_TEMP/x" ${args}`,
+      {},
+      s.bin,
+    );
+    if (creates) {
+      assert.equal(r.status, 0, `${asset} ${args}: ${r.out}`);
+      assert.ok(fs.existsSync(path.join(r.runnerTemp, "x", creates)), `${asset} ${args} creates ${creates}`);
+    } else {
+      assert.equal(r.status, 2, `${asset} ${args} fails like GNU tar: ${r.out}`);
+      assert.match(r.out, /Not found in archive/, `${asset} ${args}`);
+    }
+  }
+});
 
 // Release sha256 per architecture, from each release's own checksum file.
 const STEPS = [
@@ -188,6 +466,7 @@ for (const t of STEPS) {
       assert.ok(calls.includes(`curl -sSfL -o ${file} `) && calls.includes(`/${t.asset[arch]}\n`), calls);
       assert.ok(calls.includes(`sha256sum -c - <<${t.sha[arch]}  ${file}\n`), calls);
       assert.ok(calls.indexOf("sha256sum") < calls.indexOf("tar "), "checksum before extract");
+      assert.ok(calls.includes(`tar -xzf ${file} -C ${path.join(r.runnerTemp, t.dl)} ${t.bin}\n`), `${t.bin} is extracted by its member name: ${calls}`);
       const src = path.join(r.runnerTemp, t.dl, t.bin);
       assert.ok(calls.includes(`sudo install ${src} /usr/local/bin/${t.bin}\n`), calls);
       assert.ok(fs.existsSync(src), `${t.bin} is extracted to ${src}`);
@@ -241,7 +520,9 @@ test("mesh-manifests.yml 'Install validation tools' fetches each tool for the ru
       assert.ok(calls.includes(`curl -sSfL -o ${file} `) && calls.includes(`/${t.asset[arch]}\n`), `${t.bin}: ${calls}`);
       const check = calls.indexOf(`sha256sum -c - <<${t.sha[arch]}  ${file}\n`);
       assert.ok(check >= 0, `${t.bin} checked against its ${arch} sha256: ${calls}`);
-      assert.ok(check < calls.indexOf(`tar -xzf ${file} `), `${t.bin} checked before it is extracted`);
+      const extract = calls.indexOf(`tar -xzf ${file} -C ${path.join(r.runnerTemp, "bin")} ${t.bin}\n`);
+      assert.ok(extract >= 0, `${t.bin} is extracted by its member name: ${calls}`);
+      assert.ok(check < extract, `${t.bin} checked before it is extracted`);
     }
     const helm = path.join(r.runnerTemp, "dl", "helm.tar.gz");
     assert.ok(calls.includes(`curl -sSfL -o ${helm} https://get.helm.sh/helm-${env.HELM_VERSION}-${HELM_DIR[arch]}.tar.gz\n`), calls);
