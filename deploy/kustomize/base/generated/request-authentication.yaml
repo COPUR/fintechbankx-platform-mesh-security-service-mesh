@@ -187,3 +187,24 @@ spec:
         - name: Authorization
           prefix: "DPoP "
       forwardOriginalToken: true
+---
+apiVersion: security.istio.io/v1
+kind: RequestAuthentication
+metadata:
+  name: keycloak-jwt-accounts-ledger-service
+  namespace: corebanking
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: accounts-ledger-service
+  jwtRules:
+    - issuer: https://IDENTITY_HOST/realms/fintechbankx
+      jwksUri: https://IDENTITY_HOST/realms/fintechbankx/protocol/openid-connect/certs
+      audiences:
+        - svc-acc-accounts-ledger
+      fromHeaders:
+        - name: Authorization
+          prefix: "Bearer "
+        - name: Authorization
+          prefix: "DPoP "
+      forwardOriginalToken: true

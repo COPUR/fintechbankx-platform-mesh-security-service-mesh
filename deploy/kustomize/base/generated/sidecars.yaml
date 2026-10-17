@@ -23,6 +23,7 @@ spec:
   egress:
     - hosts:
         - ./*
+        - corebanking/*
         - customer/*
         - identity/*
         - istio-system/*
@@ -40,6 +41,7 @@ spec:
     - hosts:
         - ./*
         - compliance/*
+        - corebanking/*
         - customer/*
         - identity/*
         - istio-system/*
@@ -113,6 +115,21 @@ apiVersion: networking.istio.io/v1
 kind: Sidecar
 metadata:
   name: default
+  namespace: corebanking
+spec:
+  egress:
+    - hosts:
+        - ./*
+        - identity/*
+        - istio-system/*
+        - observability/*
+  outboundTrafficPolicy:
+    mode: REGISTRY_ONLY
+---
+apiVersion: networking.istio.io/v1
+kind: Sidecar
+metadata:
+  name: default
   namespace: identity
 spec:
   egress:
@@ -133,6 +150,7 @@ spec:
     - hosts:
         - ./*
         - compliance/*
+        - corebanking/*
         - customer/*
         - identity/*
         - istio-system/*

@@ -7,8 +7,10 @@
 //    templates/migration-job.yaml and _helpers.tpl) as their own
 //    ServiceAccount <service>-db-migration (no token);
 //  - loan-lifecycle (e0b4900), payment initiation/settlement (e3122fc),
-//    recurring mandates (2c0d828), bulk orchestration (6a51b9e) and request
-//    to pay (bd553e7) as their own hook ServiceAccount <service>-db-migration
+//    recurring mandates (2c0d828), bulk orchestration (6a51b9e), request
+//    to pay (bd553e7) and the core banking accounts ledger
+//    (neo-fintechbankx-corebanking-accounts-ledger-service 2db7a04) as their
+//    own hook ServiceAccount <service>-db-migration
 //    (templates/migration-job.yaml: helm.sh/hook pre-install,pre-upgrade,
 //    hook-weight -10 ahead of the Job's 0, automountServiceAccountToken false,
 //    no IAM role), named in the Job pod's serviceAccountName;
@@ -177,6 +179,30 @@ const LENDING = [
   },
 ].map((j) => chartJob({ ...j, sa: j.name }));
 
+// Core banking accounts ledger: the same hook ServiceAccount shape as loan and
+// payments (ledger 2db7a04 deploy/helm/accounts-ledger-service/templates/
+// migration-job.yaml:11-26 ServiceAccount, :71-91 pod: accounts.baseLabels,
+// component db-migration, fintechbankx.io/squad from values squad, inject from
+// values migration.istioSidecar, false; serviceAccountName :90). API pod
+// labels: deployment.yaml:22-28 with values.yaml podLabels.
+const COREBANKING = [
+  {
+    ns: 'corebanking',
+    owner: 'accounts-ledger-service',
+    name: 'accounts-ledger-service-db-migration',
+    pod: { 'fintechbankx.io/squad': 'corebanking' },
+    api: {
+      'fintechbankx.io/squad': 'corebanking',
+      'app.kubernetes.io/part-of': 'fintechbankx-corebanking',
+      'fintechbankx.io/app': 'app-acc-ledger',
+      'fintechbankx.io/service-id': 'svc-acc-accounts-ledger',
+    },
+  },
+].map((j) => chartJob({ ...j, sa: j.name }));
+
+// Every Job on a hook ServiceAccount of its own named like the Job.
+const HOOK_SA = [...LENDING, ...COREBANKING];
+
 // Namespace default ServiceAccount (no serviceAccountName, no token).
 const DEFAULT_SA = [
   {
@@ -188,7 +214,7 @@ const DEFAULT_SA = [
   },
 ].map((j) => chartJob({ ...j, sa: NAMESPACE_DEFAULT_SA }));
 
-const JOBS = [...CRC, ...LENDING, ...DEFAULT_SA];
+const JOBS = [...CRC, ...HOOK_SA, ...DEFAULT_SA];
 const JOB_NS = new Set(JOBS.map((j) => j.ns));
 const apiPod = (name) => ({ 'app.kubernetes.io/name': name, 'app.kubernetes.io/instance': name, 'app.kubernetes.io/component': 'service' });
 
@@ -436,26 +462,27 @@ test('the namespace default ServiceAccount is never an identity', () => {
 });
 
 // Who runs as the namespace default ServiceAccount: consent's migrate Job
-// alone. Loan and the four payments services render the Job with a hook
+// alone. Loan, the four payments services and the ledger render the Job with a hook
 // ServiceAccount of its own (named like the Job, created at hook weight -10
 // before the Job at 0, no token, no IAM role), as the CRC charts do. Each such
 // account is a known service account of its namespace (like the CRC Jobs'),
 // never a principal (no sidecar), and the baseline's table says what each
 // Job runs as.
-test('only consent\'s migration Job runs as a namespace default ServiceAccount; the lending Jobs run as their hook ServiceAccounts', () => {
+test('only consent\'s migration Job runs as a namespace default ServiceAccount; the lending, payments and ledger Jobs run as their hook ServiceAccounts', () => {
   const onDefault = contract.namespaces.flatMap((n) =>
     (n.workloads || []).filter((w) => w.serviceAccount === NAMESPACE_DEFAULT_SA).map((w) => `${n.name}/${w.name}`),
   );
   assert.deepEqual(onDefault, DEFAULT_SA.map((j) => `${j.ns}/${j.name}`));
   assert.deepEqual(onDefault, ['open-finance/consent-authorization-service-migrate']);
-  assert.deepEqual(LENDING.map((j) => `${j.ns}/${j.sa}`), [
+  assert.deepEqual(HOOK_SA.map((j) => `${j.ns}/${j.sa}`), [
     'lending/loan-lifecycle-service-db-migration',
     'payments/payment-initiation-settlement-service-db-migration',
     'payments/payment-recurring-mandates-service-db-migration',
     'payments/payment-bulk-orchestration-service-db-migration',
     'payments/payment-request-to-pay-service-db-migration',
+    'corebanking/accounts-ledger-service-db-migration',
   ]);
-  for (const j of [...CRC, ...LENDING]) {
+  for (const j of [...CRC, ...HOOK_SA]) {
     assert.ok(knownServiceAccounts(contract).has(`${j.ns}/${j.sa}`), `${j.ns}/${j.sa} is no known service account`);
     assert.ok(!knownPrincipals(contract).has(principal(contract, j.ns, j.sa)), `${j.ns}/${j.sa} is a principal`);
   }
@@ -465,7 +492,7 @@ test('only consent\'s migration Job runs as a namespace default ServiceAccount; 
     assert.ok(row, `baseline table has a row for ${j.ns}/${j.name}`);
     return row.split('|').at(-2);
   };
-  for (const j of LENDING) {
+  for (const j of HOOK_SA) {
     assert.match(runsAs(j), /hook ServiceAccount/, `${j.ns}/${j.name}: baseline says it runs as its hook ServiceAccount`);
     assert.doesNotMatch(runsAs(j), /`default`/, `${j.ns}/${j.name}: baseline says it runs as the namespace default`);
   }
@@ -601,7 +628,7 @@ test('renderer refuses a namespace mixing sidecar-less and meshed Jobs of one co
 test('a meshed db-migration Job is refused in every service namespace, and the README says so', () => {
   const withAurora = serviceWorkloads(contract).filter((w) => (w.datastores || []).includes('aurora-postgresql'));
   const namespaces = [...new Set(withAurora.map((w) => w.ns))].sort();
-  assert.deepEqual(namespaces, ['compliance', 'customer', 'lending', 'open-finance', 'payments', 'risk']);
+  assert.deepEqual(namespaces, ['compliance', 'corebanking', 'customer', 'lending', 'open-finance', 'payments', 'risk']);
   for (const ns of namespaces) {
     const jobs = contract.namespaces.find((n) => n.name === ns).workloads.filter((w) => w.role === 'db-migration');
     assert.ok(jobs.length && jobs.every((w) => w.sidecar === false), `${ns}: every db-migration Job is sidecar-less`);
@@ -635,8 +662,8 @@ test('a meshed db-migration Job is refused in every service namespace, and the R
   assert.match(bullet.slice(0, bullet.indexOf('- reference secrets')), /without a sidecar.*checkSidecarLessJobComponents/);
 });
 
-// Loan, payment initiation, recurring mandates and bulk orchestration take the
-// Job's opt-out from values migration.istioSidecar (default false; each
+// Loan, payment initiation, recurring mandates, bulk orchestration and the
+// accounts ledger take the Job's opt-out from values migration.istioSidecar (default false; each
 // values.yaml says to set it true once the cluster runs native sidecars, as
 // this mesh does, and that the mesh must first admit the Job's hook
 // ServiceAccount). Rendered with --set migration.istioSidecar=true, the Job pod
@@ -645,22 +672,27 @@ test('a meshed db-migration Job is refused in every service namespace, and the R
 // hard-codes "false" (bd553e7) and has no such value. Under the committed
 // contract that pod still gets no istiod egress (the sidecar-less exclusion
 // is by component), so the contract entry changes with the value (no
-// `sidecar: false`, no exception, same ServiceAccount): in lending the loan
-// Job renders meshed alone; in payments a meshed Job next to the sidecar-less
+// `sidecar: false`, no exception, same ServiceAccount): in lending and
+// corebanking, which hold one db-migration Job each, the loan and ledger Jobs
+// render meshed alone; in payments a meshed Job next to the sidecar-less
 // ones is refused (checkSidecarLessJobComponents), so the four payments Jobs
 // move together, request to pay's chart first. It is never a refusal for the
 // namespace default ServiceAccount. The baseline says so.
 test('migration.istioSidecar true meshes the Job on its hook ServiceAccount; the contract moves with it, and the baseline says so', () => {
-  const FLIPPABLE = ['loan-lifecycle-service', 'payment-initiation-settlement-service', 'payment-recurring-mandates-service', 'payment-bulk-orchestration-service'];
+  const FLIPPABLE = [
+    'loan-lifecycle-service', 'payment-initiation-settlement-service', 'payment-recurring-mandates-service',
+    'payment-bulk-orchestration-service', 'accounts-ledger-service',
+  ];
+  const migrationJobs = (ns) => contract.namespaces.find((n) => n.name === ns).workloads.filter((w) => w.role === 'db-migration');
   for (const owner of FLIPPABLE) {
-    const j = LENDING.find((x) => x.owner === owner);
+    const j = HOOK_SA.find((x) => x.owner === owner);
     const flipped = { ...j.pod, 'sidecar.istio.io/inject': 'true' };
     assert.deepEqual(names(selecting(netpols, j.ns, flipped, 'Egress')), ['allow-egress-aurora', 'allow-egress-dns', 'default-deny-all'], `${owner}: flipped Job pod`);
     const c = structuredClone(contract);
     delete workload(c, j).sidecar;
     c.exceptions.workloadInjection = c.exceptions.workloadInjection.filter((x) => x.workload !== `${j.ns}/${j.name}`);
     assert.equal(workload(c, j).serviceAccount, j.sa, `${owner}: modelled on its hook ServiceAccount`);
-    if (j.ns === 'lending') {
+    if (migrationJobs(j.ns).length === 1) {
       const eg = names(selecting(render(c)['network-policies.yaml'], j.ns, flipped, 'Egress'));
       assert.ok(eg.includes('allow-egress-istiod') && !eg.includes('allow-egress-msk'), `${owner}: ${eg.join(', ')}`);
     } else {
@@ -679,6 +711,8 @@ test('migration.istioSidecar true meshes the Job on its hook ServiceAccount; the
   assert.equal(flip.length, 1, 'one baseline paragraph on migration.istioSidecar');
   assert.match(flip[0], /hook ServiceAccount/, 'names the account the flipped Job runs as');
   assert.match(flip[0], /checkSidecarLessJobComponents/, 'says the renderer refuses one payments Job meshed alone');
+  assert.match(flip[0], /accounts ledger/, 'names the ledger chart, whose Job also takes the value');
+  assert.deepEqual(['lending', 'corebanking'].map((ns) => migrationJobs(ns).length), [1, 1], 'lending and corebanking hold one db-migration Job each');
   assert.doesNotMatch(flip[0], /no `?serviceAccountName/, 'says the Job names no ServiceAccount');
   assert.doesNotMatch(flip[0], /checkNamespaceDefaultServiceAccount/, 'says the flipped Job runs as the namespace default ServiceAccount');
 });

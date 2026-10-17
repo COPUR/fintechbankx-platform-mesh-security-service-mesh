@@ -32,7 +32,7 @@ function policySpec() {
 const nsObject = (name, kind) => ({
   metadata: { name, labels: { 'kubernetes.io/metadata.name': name, 'fintechbankx.io/namespace-kind': kind } },
 });
-const SERVICE_NS = { payments: 'service', lending: 'service', observability: 'platform', sandbox: 'service' };
+const SERVICE_NS = { payments: 'service', lending: 'service', corebanking: 'service', observability: 'platform', sandbox: 'service' };
 
 function admissionCase(name, ns, { label, store = 'aws-secrets-manager', storeKind = 'ClusterSecretStore', keys = [], dataFrom, data } = {}) {
   return {
@@ -136,4 +136,33 @@ test('CEL: remote keys ending in /db-import are rejected, even inside the own <e
     assert.deepEqual(r[name].messages, [`remote keys ending in /db-import (operator import credential) are never synced into a cluster; got ${key}`], name);
   }
   assert.equal(r['db-import-lookalike'].allowed, true, r['db-import-lookalike'].messages.join('; '));
+});
+
+// Core banking accounts ledger (chart deploy/helm/accounts-ledger-service,
+// ledger 2db7a04): both ExternalSecrets carry app.kubernetes.io/name
+// accounts-ledger-service (the migration one also component db-migration) and
+// read <env>/accounts-ledger-service/db-app and /db-migration. The slug is that
+// label, not the context code: "env/acc-accounts-ledger" keys are refused, and
+// so is the Job's hook ServiceAccount name as a label.
+const LEDGER = 'accounts-ledger-service';
+const ledgerCases = [
+  admissionCase('ledger-runtime', 'corebanking', { label: LEDGER, keys: [`${ENV}/${LEDGER}/db-app`] }),
+  admissionCase('ledger-migration', 'corebanking', { label: LEDGER, keys: [`${ENV}/${LEDGER}/db-migration`, `${ENV}/${LEDGER}/db-migration`] }),
+  admissionCase('ledger-context-code-key', 'corebanking', { label: LEDGER, keys: [`${ENV}/acc-accounts-ledger/db-app`] }),
+  admissionCase('ledger-context-code-label', 'corebanking', { label: 'acc-accounts-ledger', keys: [`${ENV}/acc-accounts-ledger/db-app`] }),
+  admissionCase('ledger-hook-account-label', 'corebanking', { label: `${LEDGER}-db-migration`, keys: [`${ENV}/${LEDGER}-db-migration/db-migration`] }),
+  admissionCase('ledger-neighbour', 'corebanking', { label: LEDGER, keys: [`${ENV}/payment-initiation-settlement-service/db-app`] }),
+  admissionCase('ledger-from-payments', 'payments', { label: BULK, keys: [`${ENV}/${LEDGER}/db-app`] }),
+];
+
+test('CEL: corebanking admits the ledger\'s own <env>/accounts-ledger-service/ keys only', { skip }, () => {
+  const r = evaluate(policySpec(), ledgerCases);
+  const allowed = Object.entries(r).filter(([, v]) => v.allowed).map(([k]) => k).sort();
+  assert.deepEqual(allowed, ['ledger-migration', 'ledger-runtime'], JSON.stringify(r));
+  const msg = (name) => r[name].messages.join(' | ');
+  assert.equal(msg('ledger-context-code-key'), `every remote key must start with ${ENV}/${LEDGER}/; got ${ENV}/acc-accounts-ledger/db-app`);
+  assert.match(msg('ledger-context-code-label'), new RegExp(`must carry label app.kubernetes.io/name set to one of its service accounts: ${LEDGER}$`));
+  assert.match(msg('ledger-hook-account-label'), /must carry label app.kubernetes.io\/name/);
+  assert.match(msg('ledger-neighbour'), /got prod\/payment-initiation-settlement-service\/db-app/);
+  assert.match(msg('ledger-from-payments'), new RegExp(`got ${ENV}/${LEDGER}/db-app`));
 });

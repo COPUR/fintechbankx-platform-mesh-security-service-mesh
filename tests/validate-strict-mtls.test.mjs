@@ -127,13 +127,16 @@ test('contract: every edge endpoint is a known service account', () => {
 test('contract: recorded gaps are not allowed by any policy', () => {
   const docs = deployable();
   const text = JSON.stringify(docs.map((d) => d.doc));
-  assert.ok(contract.gaps.some((g) => g.to.startsWith('core-banking')));
-  assert.ok(!text.includes('core-banking'), 'no manifest may route or allow traffic to core-banking yet');
+  // The accounts API gap (payment-bootstrap's placeholder http://core-banking-accounts:8080)
+  // is closed by corebanking/accounts-ledger-service (tests/accounts-ledger.test.mjs);
+  // the placeholder host itself is still never routed or allowed.
+  assert.ok(!contract.gaps.some((g) => g.to.startsWith('core-banking')));
+  assert.ok(!text.includes('core-banking'), 'no manifest may route or allow traffic to the placeholder core-banking-accounts');
   const paymentEgress = docs.filter(
     (d) => d.doc.kind === 'NetworkPolicy' && d.doc.metadata.namespace === 'payments' && /^allow-egress-.+-to-/.test(d.doc.metadata.name),
   );
   const targets = new Set(paymentEgress.map((d) => d.doc.metadata.name.replace(/^.*-to-/, '')));
-  assert.deepEqual([...targets].sort(), ['compliance', 'customer', 'identity', 'observability', 'open-finance', 'risk']);
+  assert.deepEqual([...targets].sort(), ['compliance', 'corebanking', 'customer', 'identity', 'observability', 'open-finance', 'risk']);
 });
 
 test('contract: payments reads only the customer KYC status, with GET', () => {
@@ -144,15 +147,19 @@ test('contract: payments reads only the customer KYC status, with GET', () => {
 });
 
 test('contract: east-west service edges are exactly the confirmed ones and scoped', () => {
-  const svcNs = new Set(['lending', 'payments', 'customer', 'risk', 'compliance', 'open-finance']);
+  const svcNs = new Set(['lending', 'payments', 'customer', 'risk', 'compliance', 'open-finance', 'corebanking']);
   const eastWest = expandEdges(contract).filter((e) => svcNs.has(e.from.ns) && svcNs.has(e.to.ns));
   assert.deepEqual([...new Set(eastWest.map((e) => `${e.from.ns}/${e.from.sa}->${e.to.ns}/${e.to.sa}`))].sort(), [
+    'lending/loan-lifecycle-service->corebanking/accounts-ledger-service',
     'lending/loan-lifecycle-service->customer/customer-profile-kyc-service',
+    'payments/payment-bulk-orchestration-service->corebanking/accounts-ledger-service',
     'payments/payment-bulk-orchestration-service->open-finance/consent-authorization-service',
     'payments/payment-initiation-settlement-service->compliance/compliance-evidence-service',
+    'payments/payment-initiation-settlement-service->corebanking/accounts-ledger-service',
     'payments/payment-initiation-settlement-service->customer/customer-profile-kyc-service',
     'payments/payment-initiation-settlement-service->open-finance/payee-verification-service',
     'payments/payment-initiation-settlement-service->risk/risk-decisioning-service',
+    'payments/payment-recurring-mandates-service->corebanking/accounts-ledger-service',
     'payments/payment-recurring-mandates-service->open-finance/consent-authorization-service',
   ]);
   for (const e of eastWest) {

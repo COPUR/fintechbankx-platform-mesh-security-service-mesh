@@ -133,7 +133,7 @@ gateway:
 # own (the renderer refuses anything else: that account is shared by every
 # pod without one, so it is never an identity or principal). Today only
 # consent's migrate Job declares it; every other Job runs as a ServiceAccount
-# of its own (the lending, payments and CRC charts). A workload's
+# of its own (the lending, payments, CRC and accounts ledger charts). A workload's
 # reference <namespace>/<name> (name defaults to serviceAccount) belongs to
 # that workload alone: the renderer refuses a reference two workloads of a
 # namespace use, and validator R9 an exception that would cover both.
@@ -460,6 +460,58 @@ namespaces:
         service: null
         destinationRule: false
         datastores: [aurora-postgresql]
+  # Core banking accounts ledger (ADR-030: context code acc, manifest context
+  # core_banking, squad corebanking), repo
+  # neo-fintechbankx-corebanking-accounts-ledger-service PR #1, head 2db7a04,
+  # chart deploy/helm/accounts-ledger-service. Deployment, ServiceAccount and
+  # Service accounts-ledger-service; API pods labelled app.kubernetes.io/name
+  # accounts-ledger-service and component service (_helpers.tpl:13-21,
+  # deployment.yaml:22-28), http 8080 and http-management 8081
+  # (service.yaml), scraped through the pod annotations on 8081. Aurora
+  # PostgreSQL db_acc_accounts_ledger_<env> (schema sc_acc_accounts_ledger,
+  # TLS verify-full against rds-ca-bundle) and a transactional outbox relay
+  # producing evt.acc.account.v1 (values kafka.flavour msk: Amazon MSK with IAM
+  # auth through IRSA, as every other producer here; the relay ships off,
+  # OUTBOX_RELAY_ENABLED "false"). The namespace is new; its
+  # context label is the namespace name, as for every service namespace.
+  - name: corebanking
+    context: corebanking
+    kind: service
+    workloads:
+      - serviceAccount: accounts-ledger-service
+        serviceId: svc-acc-accounts-ledger
+        sourceRepo: neo-fintechbankx-corebanking-accounts-ledger-service
+        # Customer and staff endpoints (AccountController, JournalEntryController);
+        # the gateway edges below decide which (method, path) pairs pass.
+        apiPrefix: [/api/v1/accounts, /api/v1/journal-entries]
+        datastores: [aurora-postgresql, msk]
+      # Flyway migration Job (Helm pre-install/pre-upgrade hook), ledger
+      # 2db7a04: templates/migration-job.yaml ServiceAccount :11-26 (hook
+      # weight -10, automountServiceAccountToken false, no IAM role) and pod
+      # template :71-91 (accounts.baseLabels: app.kubernetes.io/name
+      # accounts-ledger-service and instance <release>; component db-migration,
+      # fintechbankx.io/squad, and sidecar.istio.io/inject label and annotation
+      # from values migration.istioSidecar, false). The pod runs as its own hook
+      # ServiceAccount accounts-ledger-service-db-migration
+      # (serviceAccountName :90), mounts the hook Secret
+      # accounts-ledger-service-db-migration (DB_MIGRATION_USERNAME/_PASSWORD,
+      # synced from <env>/accounts-ledger-service/db-migration) and the
+      # rds-ca-bundle ConfigMap, and opens JDBC to DB_URL only: the "migrate"
+      # context configures the DataSource and Flyway, no Kafka, web, security
+      # or AWS client (AccountsLedgerApplication.run). Same selector, sidecar
+      # opt-out and policy shape as the loan Job: DNS and the name-keyed
+      # Aurora egress only.
+      - serviceAccount: accounts-ledger-service-db-migration
+        role: db-migration
+        migrates: accounts-ledger-service
+        sourceRepo: neo-fintechbankx-corebanking-accounts-ledger-service
+        selector:
+          app.kubernetes.io/name: accounts-ledger-service
+          app.kubernetes.io/component: db-migration
+        sidecar: false
+        service: null
+        destinationRule: false
+        datastores: [aurora-postgresql]
   - name: identity
     context: identity
     kind: platform
@@ -763,6 +815,16 @@ exceptions:
         open-finance decision. Scoped to pods labelled app.kubernetes.io/name consent-authorization-service
         AND component db-migration: DNS and the consent Aurora (5432) only, no
         ingress, no principal. The consent-authorization-service Deployment keeps its sidecar.
+    - workload: corebanking/accounts-ledger-service-db-migration
+      reason: >-
+        Flyway migration Job of accounts-ledger-service (ledger 2db7a04, chart
+        templates/migration-job.yaml), run as its own hook ServiceAccount
+        without a token. The chart sets sidecar.istio.io/inject
+        "false" on the pods (values migration.istioSidecar); this mesh does not require it (istiod injects
+        native sidecars). Accepted as the owner's choice pending the
+        corebanking decision. Scoped to pods labelled app.kubernetes.io/name accounts-ledger-service
+        AND component db-migration: DNS and the ledger Aurora (5432) only, no
+        ingress, no principal. The accounts-ledger-service Deployment keeps its sidecar.
   peerAuthentication: []          # no PERMISSIVE or DISABLE anywhere
   requestAuthentication:
     - namespace: open-finance
@@ -837,6 +899,41 @@ edges:
     paths: [/api/v1/compliance, /api/v1/compliance/*]
     notPaths: [/api/v1/compliance/screen]   # called by payments only (service-only, review finding)
     evidence: compliance controller @RequestMapping("/api/v1/compliance")
+  # Gateway -> accounts ledger (ledger 2db7a04, AccountController and
+  # JournalEntryController @PreAuthorize): first-party clients only, as for
+  # the customer API; request.auth comes from the ledger workload's
+  # RequestAuthentication (aud svc-acc-accounts-ledger). One edge per
+  # (method, path) set: an operation ANDs its methods and paths. GET an
+  # account is CUSTOMER (own only), BANKER and ADMIN, so the web, mobile and
+  # staff clients; opening, freezing, unfreezing and closing an account and
+  # reading a journal entry are BANKER/ADMIN, so the staff client only (staff
+  # sign in through fintechbankx-staff-web, identity review 2026-10-08).
+  # POST /api/v1/journal-entries (ADMIN or a SERVICE_CALLER) moves money and
+  # stays off the public gateway, like customer credit reserve/release; it is
+  # allowed east-west below.
+  - from: istio-ingress/istio-ingressgateway
+    to: corebanking/accounts-ledger-service
+    port: 8080
+    methods: [GET]
+    paths: ["/api/v1/accounts/{*}"]
+    when: *first-party-azp
+    evidence: ledger 2db7a04 AccountController GET /api/v1/accounts/{accountId} (CUSTOMER own only, BANKER, ADMIN, SERVICE)
+  - from: istio-ingress/istio-ingressgateway
+    to: corebanking/accounts-ledger-service
+    port: 8080
+    methods: [POST]
+    paths: [/api/v1/accounts, "/api/v1/accounts/{*}/freeze", "/api/v1/accounts/{*}/unfreeze", "/api/v1/accounts/{*}/close"]
+    when: &staff-azp
+      - key: request.auth.claims[azp]
+        values: [fintechbankx-staff-web]
+    evidence: ledger 2db7a04 AccountController POST /api/v1/accounts and /api/v1/accounts/{accountId}/freeze|unfreeze|close (BANKER, ADMIN)
+  - from: istio-ingress/istio-ingressgateway
+    to: corebanking/accounts-ledger-service
+    port: 8080
+    methods: [GET]
+    paths: ["/api/v1/journal-entries/{*}"]
+    when: *staff-azp
+    evidence: ledger 2db7a04 JournalEntryController GET /api/v1/journal-entries/{journalEntryId} (BANKER, ADMIN, SERVICE)
   - from: istio-ingress/istio-ingressgateway
     to: identity/keycloak
     port: 8080
@@ -869,6 +966,57 @@ edges:
     methods: [GET]
     paths: ["/api/v1/customers/{*}/kyc-status"]
     evidence: customer thread 2026-10-08, GET /api/v1/customers/{id}/kyc-status for payments
+
+  # East-west: SERVICE_CALLERS -> accounts ledger (ledger 2db7a04). Client
+  # credentials tokens with aud svc-acc-accounts-ledger (Keycloak audience
+  # mapper on each caller's client); the ledger checks azp against
+  # SERVICE_CALLERS (values config.SERVICE_CALLERS:
+  # svc-pay-initiation-settlement, svc-pay-recurring-mandates,
+  # svc-pay-bulk-orchestration, svc-ln-loan-lifecycle). Paths are the
+  # ledger's own (api/openapi/accounts-ledger.yaml), one edge per (method,
+  # path): account reads for the two callers with an accounts HTTP adapter,
+  # journal posting for the four SERVICE_CALLERS (bulk and loan post, they do
+  # not read). This closes the former gap payments -> accounts API; the
+  # callers' ACCOUNTS_SERVICE_BASE_URL is still empty in their values and has
+  # to name http://accounts-ledger-service.corebanking.svc.cluster.local:8080.
+  # No caller adapter for journal posting exists yet; narrow or drop an edge
+  # if the adapters differ.
+  - from: payments/payment-initiation-settlement-service
+    to: corebanking/accounts-ledger-service
+    port: 8080
+    methods: [GET]
+    paths: ["/api/v1/accounts/{*}"]
+    evidence: initiation e3122fc CoreBankingAccountHttpAdapter GET /api/v1/accounts/{accountId} (ACCOUNTS_ADAPTER http); ledger 2db7a04 AccountController (SERVICE)
+  - from: payments/payment-recurring-mandates-service
+    to: corebanking/accounts-ledger-service
+    port: 8080
+    methods: [GET]
+    paths: ["/api/v1/accounts/{*}"]
+    evidence: recurring mandates f8bc1b0 AccountsServiceHttpAdapter GET /api/v1/accounts/{accountId} (ACCOUNTS_ADAPTER http); ledger 2db7a04 AccountController (SERVICE)
+  - from: payments/payment-initiation-settlement-service
+    to: corebanking/accounts-ledger-service
+    port: 8080
+    methods: [POST]
+    paths: [/api/v1/journal-entries]
+    evidence: ledger 2db7a04 JournalEntryController POST /api/v1/journal-entries, SERVICE_CALLERS svc-pay-initiation-settlement; no caller adapter yet
+  - from: payments/payment-recurring-mandates-service
+    to: corebanking/accounts-ledger-service
+    port: 8080
+    methods: [POST]
+    paths: [/api/v1/journal-entries]
+    evidence: ledger 2db7a04 JournalEntryController POST /api/v1/journal-entries, SERVICE_CALLERS svc-pay-recurring-mandates; no caller adapter yet
+  - from: payments/payment-bulk-orchestration-service
+    to: corebanking/accounts-ledger-service
+    port: 8080
+    methods: [POST]
+    paths: [/api/v1/journal-entries]
+    evidence: ledger 2db7a04 JournalEntryController POST /api/v1/journal-entries, SERVICE_CALLERS svc-pay-bulk-orchestration; no caller adapter yet
+  - from: lending/loan-lifecycle-service
+    to: corebanking/accounts-ledger-service
+    port: 8080
+    methods: [POST]
+    paths: [/api/v1/journal-entries]
+    evidence: ledger 2db7a04 JournalEntryController POST /api/v1/journal-entries, SERVICE_CALLERS svc-ln-loan-lifecycle; no caller adapter yet
 
   # payments -> risk / compliance: confirmed by the service threads
   # (coordinator, 2026-10-08). No HTTP adapter exists on the payment branch yet,
@@ -1290,16 +1438,9 @@ externalDependencies:
     protocol: TLS
 
 # Call edges found in service configuration whose callee does not exist yet.
+# (payments -> accounts API was one until the accounts ledger arrived: see the
+# corebanking edges above.)
 gaps:
-  - from: payments/payment-initiation-settlement-service
-    to: core-banking accounts API
-    evidence: >-
-      payment-bootstrap application.yml payment.accounts.base-url
-      ${ACCOUNTS_SERVICE_BASE_URL:http://core-banking-accounts:8080};
-      CoreBankingAccountHttpAdapter GET /api/v1/accounts/{accountId}; Helm
-      values ACCOUNTS_SERVICE_BASE_URL is empty. No core-banking repo,
-      namespace or service account exists, so no policy allows it; with
-      ACCOUNTS_ADAPTER=http the service fails closed.
   - from: payments/payment-initiation-settlement-service
     to: risk, compliance, open-finance consent and payee verification (paths)
     evidence: >-

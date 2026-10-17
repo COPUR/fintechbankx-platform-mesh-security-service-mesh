@@ -368,6 +368,26 @@ spec:
           remove:
             - forwarded
             - x-forwarded-prefix
+    - name: svc-acc-accounts-ledger
+      match:
+        - uri:
+            prefix: /api/v1/accounts
+        - uri:
+            prefix: /api/v1/journal-entries
+      route:
+        - destination:
+            host: accounts-ledger-service.corebanking.svc.cluster.local
+            port:
+              number: 8080
+      headers:
+        request:
+          set:
+            x-forwarded-proto: https
+            x-forwarded-host: API_HOST
+            x-forwarded-port: "443"
+          remove:
+            - forwarded
+            - x-forwarded-prefix
 ---
 apiVersion: networking.istio.io/v1alpha3
 kind: EnvoyFilter

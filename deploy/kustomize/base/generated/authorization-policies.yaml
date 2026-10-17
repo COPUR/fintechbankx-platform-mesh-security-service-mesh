@@ -59,6 +59,15 @@ apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
   name: default-deny
+  namespace: corebanking
+  annotations:
+    fintechbankx.io/purpose: Deny every request that no ALLOW policy matches.
+spec: {}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: default-deny
   namespace: identity
   annotations:
     fintechbankx.io/purpose: Deny every request that no ALLOW policy matches.
@@ -199,6 +208,229 @@ spec:
         - operation:
             ports:
               - "8080"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-istio-ingress-istio-ingressgateway-to-accounts-ledger-service
+  namespace: corebanking
+  annotations:
+    fintechbankx.io/evidence: ledger 2db7a04 AccountController GET /api/v1/accounts/{accountId} (CUSTOMER own only, BANKER, ADMIN, SERVICE) | ledger 2db7a04 AccountController POST /api/v1/accounts and /api/v1/accounts/{accountId}/freeze|unfreeze|close (BANKER, ADMIN) | ledger 2db7a04 JournalEntryController GET /api/v1/journal-entries/{journalEntryId} (BANKER, ADMIN, SERVICE)
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: accounts-ledger-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /api/v1/accounts/{*}
+      when:
+        - key: request.auth.claims[azp]
+          values:
+            - fintechbankx-web
+            - fintechbankx-mobile
+            - fintechbankx-staff-web
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /api/v1/accounts
+              - /api/v1/accounts/{*}/freeze
+              - /api/v1/accounts/{*}/unfreeze
+              - /api/v1/accounts/{*}/close
+      when:
+        - key: request.auth.claims[azp]
+          values:
+            - fintechbankx-staff-web
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /api/v1/journal-entries/{*}
+      when:
+        - key: request.auth.claims[azp]
+          values:
+            - fintechbankx-staff-web
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-lending-loan-lifecycle-service-to-accounts-ledger-service
+  namespace: corebanking
+  annotations:
+    fintechbankx.io/evidence: ledger 2db7a04 JournalEntryController POST /api/v1/journal-entries, SERVICE_CALLERS svc-ln-loan-lifecycle; no caller adapter yet
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: accounts-ledger-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/lending/sa/loan-lifecycle-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /api/v1/journal-entries
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-observability-prometheus-to-accounts-ledger-service
+  namespace: corebanking
+  annotations:
+    fintechbankx.io/evidence: Helm pod annotations prometheus.io/port=8081, path /actuator/prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: accounts-ledger-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/observability/sa/prometheus
+      to:
+        - operation:
+            ports:
+              - "8081"
+            methods:
+              - GET
+            paths:
+              - /actuator/prometheus
+              - /actuator/health
+              - /actuator/health/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-payments-payment-bulk-orchestration-service-to-accounts-ledger-service
+  namespace: corebanking
+  annotations:
+    fintechbankx.io/evidence: ledger 2db7a04 JournalEntryController POST /api/v1/journal-entries, SERVICE_CALLERS svc-pay-bulk-orchestration; no caller adapter yet
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: accounts-ledger-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-bulk-orchestration-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /api/v1/journal-entries
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-payments-payment-initiation-settlement-service-to-accounts-ledger-service
+  namespace: corebanking
+  annotations:
+    fintechbankx.io/evidence: initiation e3122fc CoreBankingAccountHttpAdapter GET /api/v1/accounts/{accountId} (ACCOUNTS_ADAPTER http); ledger 2db7a04 AccountController (SERVICE) | ledger 2db7a04 JournalEntryController POST /api/v1/journal-entries, SERVICE_CALLERS svc-pay-initiation-settlement; no caller adapter yet
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: accounts-ledger-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-initiation-settlement-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /api/v1/accounts/{*}
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-initiation-settlement-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /api/v1/journal-entries
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-payments-payment-recurring-mandates-service-to-accounts-ledger-service
+  namespace: corebanking
+  annotations:
+    fintechbankx.io/evidence: recurring mandates f8bc1b0 AccountsServiceHttpAdapter GET /api/v1/accounts/{accountId} (ACCOUNTS_ADAPTER http); ledger 2db7a04 AccountController (SERVICE) | ledger 2db7a04 JournalEntryController POST /api/v1/journal-entries, SERVICE_CALLERS svc-pay-recurring-mandates; no caller adapter yet
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: accounts-ledger-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-recurring-mandates-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /api/v1/accounts/{*}
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/payments/sa/payment-recurring-mandates-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /api/v1/journal-entries
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -376,6 +608,45 @@ spec:
         - source:
             principals:
               - cluster.local/ns/compliance/sa/compliance-evidence-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/token
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-corebanking-accounts-ledger-service-to-keycloak
+  namespace: identity
+  annotations:
+    fintechbankx.io/evidence: spring.security.oauth2.resourceserver.jwt.jwk-set-uri in every service application.yml | platform contract - one confidential client per service, client-credentials
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/corebanking/sa/accounts-ledger-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /realms/fintechbankx/protocol/openid-connect/certs
+              - /realms/fintechbankx/.well-known/openid-configuration
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/corebanking/sa/accounts-ledger-service
       to:
         - operation:
             ports:
@@ -1463,6 +1734,37 @@ spec:
         - source:
             principals:
               - cluster.local/ns/compliance/sa/compliance-evidence-service
+      to:
+        - operation:
+            ports:
+              - "4318"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-corebanking-accounts-ledger-service-to-otel-collector
+  namespace: observability
+  annotations:
+    fintechbankx.io/evidence: otel-collector agent Service 4317/4318; istiod meshConfig extensionProviders otel-tracing
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/corebanking/sa/accounts-ledger-service
+      to:
+        - operation:
+            ports:
+              - "4317"
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/corebanking/sa/accounts-ledger-service
       to:
         - operation:
             ports:
@@ -3540,6 +3842,26 @@ spec:
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
+  name: allow-health-endpoints
+  namespace: corebanking
+  annotations:
+    fintechbankx.io/purpose: Kubelet probes are rewritten by the sidecar agent (port 15020) and never reach this rule; it keeps /actuator/health on the management port reachable for mesh health checkers.
+spec:
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            methods:
+              - GET
+            ports:
+              - "8081"
+            paths:
+              - /actuator/health
+              - /actuator/health/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
   name: require-jwt-for-api
   namespace: lending
   annotations:
@@ -3622,6 +3944,26 @@ kind: AuthorizationPolicy
 metadata:
   name: require-jwt-for-api
   namespace: compliance
+  annotations:
+    fintechbankx.io/purpose: Reject /api/** requests that carry no valid Keycloak JWT.
+spec:
+  action: DENY
+  rules:
+    - from:
+        - source:
+            notRequestPrincipals:
+              - "*"
+      to:
+        - operation:
+            paths:
+              - /api
+              - /api/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: require-jwt-for-api
+  namespace: corebanking
   annotations:
     fintechbankx.io/purpose: Reject /api/** requests that carry no valid Keycloak JWT.
 spec:

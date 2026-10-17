@@ -68,6 +68,15 @@ apiVersion: security.istio.io/v1
 kind: PeerAuthentication
 metadata:
   name: default
+  namespace: corebanking
+spec:
+  mtls:
+    mode: STRICT
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
   namespace: identity
 spec:
   mtls:

@@ -28,16 +28,18 @@ in the `banking` namespace, which would conflict with Istio's own injector).
 | every service | `identity/keycloak` | `OIDC_JWK_SET_URI`; client-credentials per platform contract | ALLOW JWKS GET, discovery GET, token POST |
 | every service | `observability/otel-collector` | platform contract (OTLP 4317/4318) | ALLOW ports 4317/4318 |
 | `payments/payment-initiation-settlement-service` | `open-finance/consent-authorization-service`, `open-finance/payee-verification-service` | Confirmed by the service threads (2026-10-08); no adapter on the payment branch yet | ALLOW by principal on 8080, port-only |
+| ingress gateway | `corebanking/accounts-ledger-service` (`/api/v1/accounts`, `/api/v1/journal-entries`) | Ledger PR #1 2db7a04, `AccountController` and `JournalEntryController` `@PreAuthorize` | ALLOW by gateway principal per (method, path), JWT required: `GET /api/v1/accounts/{*}` for the web, mobile and staff clients; account open, freeze, unfreeze, close and `GET /api/v1/journal-entries/{*}` for the staff client only; never `POST /api/v1/journal-entries` |
+| `payments/payment-initiation-settlement-service`, `payments/payment-recurring-mandates-service` | `corebanking/accounts-ledger-service` | `CoreBankingAccountHttpAdapter` (initiation e3122fc), `AccountsServiceHttpAdapter` (mandates f8bc1b0): `GET /api/v1/accounts/{accountId}`; ledger `SERVICE_CALLERS` | ALLOW by principal on 8080: `GET /api/v1/accounts/{*}` and `POST /api/v1/journal-entries` |
+| `payments/payment-bulk-orchestration-service`, `lending/loan-lifecycle-service` | `corebanking/accounts-ledger-service` | Ledger `SERVICE_CALLERS` (no caller adapter yet) | ALLOW by principal on 8080: `POST /api/v1/journal-entries` only |
 | `observability/prometheus` | every service (including the 3 new payments and 7 open-finance workloads), port 8081 | pod annotations `prometheus.io/port: 8081` | ALLOW `/actuator/prometheus`, `/actuator/health*` |
-| loan, payment initiation, customer, open-finance consent, payee verification and the 3 data services | Amazon MSK | `spring.kafka`; service threads | ServiceEntry + NetworkPolicy to `MSK_CIDR`, selected per workload |
+| loan, payment initiation, customer, open-finance consent, payee verification, the 3 data services and the accounts ledger | Amazon MSK | `spring.kafka`; service threads | ServiceEntry + NetworkPolicy to `MSK_CIDR`, selected per workload |
 | open-finance personal, business and banking-metadata data services | DocumentDB 27017, ElastiCache Redis 6379 | `OPENFINANCE_*_MONGODB_URI`, `OPENFINANCE_*_REDIS_URL` | ServiceEntries + NetworkPolicy to `DOCDB_CIDR` / `REDIS_CIDR`, selected per workload |
-| lending, payment initiation, customer, risk, compliance, open-finance consent, payee verification, ATM, products, Keycloak | Aurora PostgreSQL | `DB_URL` | ServiceEntry + NetworkPolicy to `AURORA_CIDR` |
+| lending, payment initiation, customer, risk, compliance, open-finance consent, payee verification, ATM, products, accounts ledger, Keycloak | Aurora PostgreSQL | `DB_URL` | ServiceEntry + NetworkPolicy to `AURORA_CIDR` |
 
 ### Gaps (not allowed by any policy)
 
 | Caller | Wants | Why it is a gap |
 |---|---|---|
-| `payments/payment-initiation-settlement-service` | core-banking accounts API (`GET /api/v1/accounts/{id}`) | `ACCOUNTS_SERVICE_BASE_URL` is empty in Helm values and defaults to `http://core-banking-accounts:8080`; no core-banking repo, namespace or SA exists. With `ACCOUNTS_ADAPTER=http` the service fails closed. |
 | `payments` request-to-pay, recurring-mandates, bulk-orchestration | ingress routes, datastores, call edges | Only the SAs are confirmed; they get identity, telemetry and scraping edges. Their controllers also expose `/open-finance/v1/{accounts,consents,loans}`, which overlap open-finance routes. |
 | `payments` | risk / compliance / consent / payee-verification paths | Edge confirmed but no adapter yet; the rule is port-only until methods and paths are known, then it should be narrowed like loan -> customer. |
 | `risk`, `compliance` | Kafka | Neither service configures Kafka yet; no MSK egress is granted. |
@@ -94,7 +96,7 @@ Only values backed by the dependency-resilience policy pack are set:
 
 ### Database migration Jobs (Proposed)
 
-Nine service charts run Flyway in a Helm `pre-install,pre-upgrade` hook Job,
+Ten service charts run Flyway in a Helm `pre-install,pre-upgrade` hook Job,
 never in the API containers (cicd-templates 335a345). The Job pods carry the
 service's `app.kubernetes.io/name` and `app.kubernetes.io/component=db-migration`;
 the API pods carry `component=service`. ATM directory, payee verification and
@@ -108,7 +110,7 @@ DocumentDB data services render no migration.
   pod, or any pod without the component label, never reaches the brokers.
   Every service chart must label its API pods `app.kubernetes.io/component:
   service`; a chart without it loses MSK egress (fail closed).
-- All nine hook Jobs run **without** a sidecar (`sidecar.istio.io/inject:
+- All ten hook Jobs run **without** a sidecar (`sidecar.istio.io/inject:
   "false"` on the pod, read from each chart rendered with its own CI args at
   the PR heads below) and each is a `role: db-migration` workload in the
   contract (`migrates: <service>`, selector name + component, `sidecar:
@@ -128,8 +130,9 @@ DocumentDB data services render no migration.
   | `payments/payment-recurring-mandates-service-db-migration` | recurring mandates 2c0d828 | own hook ServiceAccount, no token |
   | `payments/payment-bulk-orchestration-service-db-migration` | bulk orchestration 6a51b9e | own hook ServiceAccount, no token |
   | `open-finance/consent-authorization-service-migrate` | consent bca0e56 | namespace `default` ServiceAccount, no token |
+  | `corebanking/accounts-ledger-service-db-migration` | accounts ledger 2db7a04 | own hook ServiceAccount `<service>-db-migration`, `automountServiceAccountToken: false` |
 
-  The loan and payments charts render the Job's ServiceAccount as a hook of
+  The loan, payments and accounts ledger charts render the Job's ServiceAccount as a hook of
   its own (`helm.sh/hook: pre-install,pre-upgrade`, hook weight -10, ahead of
   the Job at 0: the release's own ServiceAccount does not exist yet when a
   first install runs the hooks), named like the Job, with
@@ -163,8 +166,9 @@ DocumentDB data services render no migration.
   `allow-egress-vpc-https`, `allow-ingress-node-health`,
   `allow-ingress-observability-scrape`, `allow-ingress-from-<namespace>` and
   the service's edge egress (identity and observability for every service;
-  also customer for loan, and customer, risk, compliance and open-finance
-  for payment initiation, open-finance for bulk and mandates). So: no
+  also customer and corebanking for loan; customer, risk, compliance,
+  open-finance and corebanking for payment initiation; open-finance and
+  corebanking for bulk and mandates). So: no
   istiod, no VPC endpoints, no MSK, no east-west, no ingress. The rule is the
   same one the products history-guard check pods use (below); it applies to
   any `role: db-migration` or `role: history-guard-check` workload with
@@ -196,7 +200,8 @@ DocumentDB data services render no migration.
   `component=db-migration`, so one Job cannot move to a component of its
   own). In payments all four Jobs are sidecar-less (request to pay since
   2cd8e3c), so the shared component is fine.
-- Loan and the three other payments charts take the opt-out from values
+- Loan, the three other payments charts and the accounts ledger take the
+  opt-out from values
   `migration.istioSidecar` (default `false`; each chart's values file says
   to set it `true` once the cluster runs native sidecars, as this mesh
   does, and that the mesh must first admit the Job's hook ServiceAccount);
@@ -207,8 +212,9 @@ DocumentDB data services render no migration.
   gets no istiod egress, its proxy never gets ready
   (`holdApplicationUntilProxyStarts`), Flyway never starts and the hook
   fails at the Job's deadline. The contract entry changes with the value
-  (same ServiceAccount, no `sidecar: false`, no exception). In lending the
-  loan Job is the only `db-migration` Job, so it renders meshed alone
+  (same ServiceAccount, no `sidecar: false`, no exception). In lending and
+  corebanking the loan and ledger Jobs are the only `db-migration` Job of
+  their namespace, so each renders meshed alone
   (istiod, never MSK). In payments the renderer refuses one meshed Job next
   to the sidecar-less ones (`checkSidecarLessJobComponents`), so the four
   payments Jobs move together, request to pay's chart first (it needs the
@@ -365,10 +371,56 @@ handshake and failure counters for `MeshMtlsHandshakeFailures`.
 | workloadInjection (R9) | observability/prometheus-operator, kube-state-metrics, node-exporter | API-server webhook; scrape-only; hostNetwork. NetworkPolicy only, never a principal |
 | workloadInjection (R9) | open-finance/open-products-catalog-service-history-guard-check | Products chart opts its check pods out (not a mesh constraint; open ask). DNS and products Aurora only, never a principal |
 | workloadInjection (R9) | customer/customer-profile-kyc-service-db-migration, risk/risk-decisioning-service-db-migration, compliance/compliance-evidence-service-db-migration | CRC charts opt their Flyway Jobs out (not a mesh constraint). DNS and the service's Aurora only, never a principal |
+| workloadInjection (R9) | corebanking/accounts-ledger-service-db-migration | The accounts ledger chart opts its Flyway Job out (not a mesh constraint). DNS and the ledger's Aurora only, never a principal |
 | requestAuthentication | open-finance | Own DPoP/FAPI tokens with a per-service issuer; open data is public |
 | networkPolicyDefaultDeny | istio-system, external-secrets, cert-manager | Webhooks called from EKS control-plane ENIs; not yet drilled |
 
 There is no PeerAuthentication exception: no PERMISSIVE or DISABLE anywhere.
+
+## Core banking accounts ledger (Proposed, ledger PR #1 2db7a04)
+
+`svc-acc-accounts-ledger` (repository
+`neo-fintechbankx-corebanking-accounts-ledger-service`, chart
+`deploy/helm/accounts-ledger-service`) runs in the new service namespace
+`corebanking` (labels `fintechbankx.io/context=corebanking`,
+`istio-injection=enabled`, `fintechbankx.io/namespace-kind=service`, like
+every service namespace) as ServiceAccount `accounts-ledger-service`. It calls
+no other service; it owns Aurora PostgreSQL `db_acc_accounts_ledger_<env>` and
+publishes `evt.acc.account.v1` through an outbox relay (the chart ships it
+off, `OUTBOX_RELAY_ENABLED: "false"`; MSK egress is granted for when it is on).
+
+| What | Rendered from the contract |
+|---|---|
+| mTLS, AuthZ baseline | `PeerAuthentication default` STRICT, `default-deny`, `require-jwt-for-api`, `allow-health-endpoints` (8081) |
+| AuthN | `keycloak-jwt-accounts-ledger-service`: realm issuer, `aud` `svc-acc-accounts-ledger`, `Authorization` header only |
+| 8080 from the gateway | `GET /api/v1/accounts/{*}` (azp `fintechbankx-web`, `fintechbankx-mobile`, `fintechbankx-staff-web`); `POST /api/v1/accounts`, `POST /api/v1/accounts/{*}/freeze`, `/unfreeze`, `/close` and `GET /api/v1/journal-entries/{*}` (azp `fintechbankx-staff-web`); route `svc-acc-accounts-ledger` on both prefixes |
+| 8080 east-west | initiation/settlement and recurring mandates: `GET /api/v1/accounts/{*}`, `POST /api/v1/journal-entries`; bulk orchestration and loan lifecycle: `POST /api/v1/journal-entries`. Nobody else (request to pay included) |
+| 8081 | `observability/prometheus` (`/actuator/prometheus`, `/actuator/health*`); NetworkPolicy scrape on 8081, 15020, 15090 |
+| Egress | DNS, istiod, VPC endpoints (STS for IRSA), Aurora 5432, MSK 9098/9094 (API pods, `component=service`), Keycloak 8080 (JWKS, discovery, token), OTel collector 4317/4318 |
+| Callers' egress | `allow-egress-<caller>-to-corebanking` for the four callers only, to the ledger pods on 8080; their `Sidecar` lists `corebanking/*` |
+| Migration Job | `accounts-ledger-service-db-migration` (hook ServiceAccount, sidecar-less): DNS and the ledger's Aurora only (see "Database migration Jobs") |
+| Secrets | ExternalSecret admission scope `corebanking: [accounts-ledger-service]`: keys `<env>/accounts-ledger-service/db-app` and `<env>/accounts-ledger-service/db-migration` |
+
+- `POST /api/v1/journal-entries` moves money (`ADMIN` or a `SERVICE_CALLERS`
+  token) and stays off the public gateway, like the customer credit
+  reserve/release operations. If staff need to post manual entries from the
+  staff client, that is a new gateway edge (staff azp only) with the owner's
+  decision.
+- Journal posting edges come from the ledger's `SERVICE_CALLERS`; none of the
+  four callers has a journal adapter yet, and bulk orchestration and loan
+  lifecycle get no account read. Narrow or extend each edge with the caller's
+  adapter when it lands. The callers' `ACCOUNTS_SERVICE_BASE_URL` must name
+  `http://accounts-ledger-service.corebanking.svc.cluster.local:8080`.
+- Kafka: MSK only, as for every other producer here. The chart's
+  `kafka.flavour: strimzi` (in-cluster TLS listener 9093, excluded from the
+  sidecar) has no mesh path for any service yet: the contract has no `kafka`
+  namespace or Strimzi egress.
+- Secret slug: the platform rule is `<env>/<slug>/` with `<slug>` the
+  `app.kubernetes.io/name` label, so `accounts-ledger-service`, not the context
+  form `acc-accounts-ledger` (`tests/accounts-ledger.test.mjs`,
+  `tests/externalsecret-admission-cel.test.mjs`).
+- Not verified on a cluster; the chart's pod labels were read from its
+  templates, not rendered with Helm.
 
 ## Platform PKI install (Proposed)
 

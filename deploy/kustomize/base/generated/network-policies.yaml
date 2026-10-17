@@ -242,6 +242,34 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: allow-egress-loan-lifecycle-service-to-corebanking
+  namespace: lending
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loan-lifecycle-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: corebanking
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: accounts-ledger-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: allow-egress-loan-lifecycle-service-to-customer
   namespace: lending
 spec:
@@ -573,6 +601,34 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: allow-egress-payment-bulk-orchestration-service-to-corebanking
+  namespace: payments
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payment-bulk-orchestration-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: corebanking
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: accounts-ledger-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: allow-egress-payment-bulk-orchestration-service-to-identity
   namespace: payments
 spec:
@@ -681,6 +737,34 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: compliance-evidence-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-payment-initiation-settlement-service-to-corebanking
+  namespace: payments
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payment-initiation-settlement-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: corebanking
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: accounts-ledger-service
       ports:
         - protocol: TCP
           port: 8080
@@ -824,6 +908,34 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: risk-decisioning-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-payment-recurring-mandates-service-to-corebanking
+  namespace: payments
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: payment-recurring-mandates-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: corebanking
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: accounts-ledger-service
       ports:
         - protocol: TCP
           port: 8080
@@ -2674,6 +2786,367 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: default-deny-all
+  namespace: corebanking
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-dns
+  namespace: corebanking
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-istiod
+  namespace: corebanking
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+          podSelector:
+            matchLabels:
+              app: istiod
+      ports:
+        - protocol: TCP
+          port: 15012
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-node-health
+  namespace: corebanking
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 192.0.2.0/24
+      ports:
+        - protocol: TCP
+          port: 15020
+        - protocol: TCP
+          port: 15021
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-observability-scrape
+  namespace: corebanking
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 8081
+        - protocol: TCP
+          port: 15020
+        - protocol: TCP
+          port: 15090
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-vpc-https
+  namespace: corebanking
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 192.0.2.0/24
+      ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-aurora
+  namespace: corebanking
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - accounts-ledger-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 192.0.2.0/24
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-msk
+  namespace: corebanking
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - accounts-ledger-service
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 192.0.2.0/24
+      ports:
+        - protocol: TCP
+          port: 9098
+        - protocol: TCP
+          port: 9094
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-istio-ingress
+  namespace: corebanking
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-ingress
+          podSelector:
+            matchLabels:
+              istio: ingressgateway
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-lending
+  namespace: corebanking
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: lending
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loan-lifecycle-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-observability
+  namespace: corebanking
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-payments
+  namespace: corebanking
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: payments
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: payment-initiation-settlement-service
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: payments
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: payment-recurring-mandates-service
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: payments
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: payment-bulk-orchestration-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-accounts-ledger-service-to-identity
+  namespace: corebanking
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: accounts-ledger-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-accounts-ledger-service-to-observability
+  namespace: corebanking
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: accounts-ledger-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+              app.kubernetes.io/instance: otel-collector
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
   namespace: identity
 spec:
   podSelector: {}
@@ -2825,6 +3298,27 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: compliance-evidence-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-corebanking
+  namespace: identity
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: corebanking
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: accounts-ledger-service
       ports:
         - protocol: TCP
           port: 8080
@@ -3468,6 +3962,29 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: compliance-evidence-service
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-corebanking
+  namespace: observability
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: corebanking
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: accounts-ledger-service
       ports:
         - protocol: TCP
           port: 4317
@@ -5728,6 +6245,29 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: allow-egress-prometheus-to-corebanking
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: corebanking
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: accounts-ledger-service
+      ports:
+        - protocol: TCP
+          port: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: allow-egress-prometheus-to-customer
   namespace: observability
 spec:
@@ -6194,6 +6734,29 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: compliance-evidence-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-istio-ingressgateway-to-corebanking
+  namespace: istio-ingress
+spec:
+  podSelector:
+    matchLabels:
+      istio: ingressgateway
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: corebanking
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: accounts-ledger-service
       ports:
         - protocol: TCP
           port: 8080

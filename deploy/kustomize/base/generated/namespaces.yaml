@@ -58,6 +58,15 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
+  name: corebanking
+  labels:
+    fintechbankx.io/context: corebanking
+    istio-injection: enabled
+    fintechbankx.io/namespace-kind: service
+---
+apiVersion: v1
+kind: Namespace
+metadata:
   name: identity
   labels:
     fintechbankx.io/context: identity

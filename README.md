@@ -107,7 +107,7 @@ in their namespace and that ClusterIssuer `fintechbankx-internal-ca` exists.
 A service chart must (platform contract addendum, 2026-10-08):
 
 - install into its context namespace (`lending`, `payments`, `customer`,
-  `risk`, `compliance`, `open-finance`); these and `identity`,
+  `risk`, `compliance`, `open-finance`, `corebanking`); these and `identity`,
   `observability` are injected. `istio-system`, `kube-system`,
   `external-secrets` and `kafka` are not;
 - use the service account named in the contract (= chart name), with pod labels
