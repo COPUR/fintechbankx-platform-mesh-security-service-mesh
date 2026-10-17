@@ -122,24 +122,32 @@ DocumentDB data services render no migration.
   | `customer/customer-profile-kyc-service-db-migration` | customer (CRC branch) | own ServiceAccount `<service>-db-migration`, no token |
   | `risk/risk-decisioning-service-db-migration` | risk (CRC branch) | own ServiceAccount, no token |
   | `compliance/compliance-evidence-service-db-migration` | compliance (CRC branch) | own ServiceAccount, no token |
-  | `lending/loan-lifecycle-service-db-migration` | loan 629444d | namespace `default` ServiceAccount, `automountServiceAccountToken: false` |
-  | `payments/payment-initiation-settlement-service-db-migration` | initiation 9671414 | namespace `default`, no token |
-  | `payments/payment-request-to-pay-service-db-migration` | request to pay 2cd8e3c | namespace `default`, no token |
-  | `payments/payment-recurring-mandates-service-db-migration` | recurring mandates ceb45b5 | namespace `default`, no token |
-  | `payments/payment-bulk-orchestration-service-db-migration` | bulk orchestration fe1d583 | namespace `default`, no token |
-  | `open-finance/consent-authorization-service-migrate` | consent e4f56b1 | namespace `default`, no token |
+  | `lending/loan-lifecycle-service-db-migration` | loan e0b4900 | own hook ServiceAccount `<service>-db-migration`, `automountServiceAccountToken: false` |
+  | `payments/payment-initiation-settlement-service-db-migration` | initiation e3122fc | own hook ServiceAccount, no token |
+  | `payments/payment-request-to-pay-service-db-migration` | request to pay bd553e7 | own hook ServiceAccount, no token |
+  | `payments/payment-recurring-mandates-service-db-migration` | recurring mandates 2c0d828 | own hook ServiceAccount, no token |
+  | `payments/payment-bulk-orchestration-service-db-migration` | bulk orchestration 6a51b9e | own hook ServiceAccount, no token |
+  | `open-finance/consent-authorization-service-migrate` | consent bca0e56 | namespace `default` ServiceAccount, no token |
 
-  A Job without `serviceAccountName` runs as the namespace `default`
-  ServiceAccount; the contract records that as `serviceAccount: default` plus
-  the Job's name as the workload `name`. That account is shared by every pod
-  of the namespace without one, so it is never an identity: the renderer
-  accepts it only on a sidecar-less Job with a name of its own, refuses an
-  edge naming `<namespace>/default`, and it is no known service account or
-  principal (`checkNamespaceDefaultServiceAccount`). With one ServiceAccount
-  for four payments Jobs, the name alone tells them apart: the renderer
-  refuses a workload reference `<namespace>/<name>` that two workloads use
-  (`checkWorkloadReferences`: both would resolve to the first one's
-  selector, so the policies keyed on the second Job's service would not
+  The loan and payments charts render the Job's ServiceAccount as a hook of
+  its own (`helm.sh/hook: pre-install,pre-upgrade`, hook weight -10, ahead of
+  the Job at 0: the release's own ServiceAccount does not exist yet when a
+  first install runs the hooks), named like the Job, with
+  `automountServiceAccountToken: false` and no IAM role, and name it in the
+  Job pod's `serviceAccountName`. The contract records it as that
+  `serviceAccount` (the workload reference is the account), as for the CRC
+  Jobs: a known service account of its namespace, never a principal (no
+  sidecar). Consent's Job names no `serviceAccountName`, so it runs as the
+  namespace `default` ServiceAccount; the contract records that as
+  `serviceAccount: default` plus the Job's name as the workload `name`. That
+  account is shared by every pod of the namespace without one, so it is never
+  an identity: the renderer accepts it only on a sidecar-less Job with a name
+  of its own, refuses an edge naming `<namespace>/default`, and it is no
+  known service account or principal (`checkNamespaceDefaultServiceAccount`).
+  Where workloads share a ServiceAccount, the name alone tells them apart: the
+  renderer refuses a workload reference `<namespace>/<name>` that two
+  workloads use (`checkWorkloadReferences`: both would resolve to the first
+  one's selector, so the policies keyed on the second Job's service would not
   exclude its pods), and validator R9 refuses one exception covering two
   workloads. None of these Jobs has an IAM role or a token, and none calls an
   AWS API: each mounts its hook Secret (the owner credential ESO syncs from
@@ -191,22 +199,20 @@ DocumentDB data services render no migration.
 - Loan and the three other payments charts take the opt-out from values
   `migration.istioSidecar` (default `false`; each chart's values file says
   to set it `true` once the cluster runs native sidecars, as this mesh
-  does). Setting it alone breaks the install: none of the four charts has a
-  value that gives the Job a ServiceAccount, so the Job runs meshed as the
-  namespace `default` ServiceAccount (no `serviceAccountName`). The renderer
-  refuses to model that (`checkNamespaceDefaultServiceAccount`: every pod
-  of the namespace without a ServiceAccount of its own would share its
-  principal), and under the current contract the pod still matches the
-  sidecar-less exclusion: no istiod egress, so its proxy never gets ready
+  does, and that the mesh must first admit the Job's hook ServiceAccount);
+  request to pay hard-codes `"false"`. Set `true`, the Job runs meshed on
+  its hook ServiceAccount (`<service>-db-migration`, the pod's
+  `serviceAccountName`). Setting it alone breaks the install: under the
+  current contract the pod still matches the sidecar-less exclusion, so it
+  gets no istiod egress, its proxy never gets ready
   (`holdApplicationUntilProxyStarts`), Flyway never starts and the hook
-  fails at the Job's deadline. A meshed Job first needs a chart template
-  change: a
-  ServiceAccount of its own created as a pre-install/pre-upgrade hook ahead
-  of the Job and named in its `serviceAccountName` (as the customer, risk
-  and compliance charts do; the release's own ServiceAccount does not exist
-  yet when a first install runs the hook). Only then can the contract entry
-  change (that ServiceAccount, no `sidecar: false`, no exception) and, in
-  payments, the other three Jobs with it, or the render fails.
+  fails at the Job's deadline. The contract entry changes with the value
+  (same ServiceAccount, no `sidecar: false`, no exception). In lending the
+  loan Job is the only `db-migration` Job, so it renders meshed alone
+  (istiod, never MSK). In payments the renderer refuses one meshed Job next
+  to the sidecar-less ones (`checkSidecarLessJobComponents`), so the four
+  payments Jobs move together, request to pay's chart first (it needs the
+  value too).
 
 **Drill checklist for the first dev-cluster install** (not run yet; record the
 evidence with the install log). Use `helm upgrade --install ... --timeout 15m`
