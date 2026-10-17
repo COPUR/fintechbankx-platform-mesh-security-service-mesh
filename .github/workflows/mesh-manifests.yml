@@ -33,9 +33,12 @@ jobs:
           set -euo pipefail
           # Runner architecture -> release asset name, with the sha256 of that asset from
           # each release's own checksum file (kustomize checksums.txt, kubeconform CHECKSUMS,
-          # istioctl-<version>-linux-<arch>.tar.gz.sha256). Only KUSTOMIZE_VERSION v5.5.0,
-          # KUBECONFORM_VERSION v0.6.7 and deploy/istio/ISTIO_VERSION 1.24.3 are pinned: a
-          # version bump must update these sums too, and any other version fails the step.
+          # istioctl-<version>-linux-<arch>.tar.gz.sha256, helm's
+          # helm-<version>-linux-<arch>.tar.gz.sha256sum, whose detached .asc on the GitHub
+          # release verifies with helm's KEYS, key 672C657BE06B4B30969C4A57461449C25E36B98E).
+          # Only KUSTOMIZE_VERSION v5.5.0, KUBECONFORM_VERSION v0.6.7, deploy/istio/ISTIO_VERSION
+          # 1.24.3 and HELM_VERSION v3.16.3 are pinned: a version bump must update these sums
+          # too, and any other version fails the step.
           istio_version="$(tr -d '[:space:]' < deploy/istio/ISTIO_VERSION)"
           if [ "$KUSTOMIZE_VERSION" != "v5.5.0" ]; then
             echo "::error::no pinned sha256 for kustomize ${KUSTOMIZE_VERSION}; only v5.5.0 is pinned"
@@ -49,15 +52,8 @@ jobs:
             echo "::error::no pinned sha256 for istioctl ${istio_version} (deploy/istio/ISTIO_VERSION); only 1.24.3 is pinned"
             exit 1
           fi
-          # helm has no pinned sha256 yet: until it has, only HELM_VERSION v3.16.3 is
-          # installed, and only on a GitHub-hosted runner (a fresh VM; this job has a
-          # read-only token and no secrets). On a self-hosted runner the step fails here.
           if [ "$HELM_VERSION" != "v3.16.3" ]; then
-            echo "::error::helm ${HELM_VERSION} has no reviewed download; only v3.16.3 is installed until helm's sha256 is pinned"
-            exit 1
-          fi
-          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
-            echo "::error::helm has no pinned sha256 yet, so it is installed only on GitHub-hosted runners (RUNNER_ENVIRONMENT=${RUNNER_ENVIRONMENT:-unset})"
+            echo "::error::no pinned sha256 for helm ${HELM_VERSION}; only v3.16.3 is pinned"
             exit 1
           fi
           case "$(uname -m)" in
@@ -66,12 +62,14 @@ jobs:
               kustomize_sha256=6703a3a70a0c47cf0b37694030b54f1175a9dfeb17b3818b623ed58b9dbc2a77
               kubeconform_sha256=95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73
               istioctl_sha256=877d629fee03cad68bf0d5561ea9fb64f287af28ec58581b8b6c49e5c650cbc9
+              helm_sha256=f5355c79190951eed23c5432a3b920e071f4c00a64f75e077de0dd4cb7b294ea
               ;;
             aarch64)
               arch=arm64
               kustomize_sha256=b4170d1acb8cfacace9f72884bef957ff56efdcd4813b66e7604aabc8b57e93d
               kubeconform_sha256=dc82f79bb03c5479b1ae5fd4af221e4b5a3111f62bf01a2795d9c5c20fa96644
               istioctl_sha256=264ef6ce29d3ef3789367342c2b6aa11872244b40920a04ac672bb3302e319a7
+              helm_sha256=5bd34ed774df6914b323ff84a0a156ea6ff2ba1eaf0113962fa773f3f9def798
               ;;
             *)
               echo "::error::no pinned validation tool builds for runner architecture $(uname -m)"
@@ -95,10 +93,8 @@ jobs:
           tar -xzf "$dl/istioctl.tar.gz" -C "$bin" istioctl
           # Pin helm: the runner's preinstalled helm uses a newer JSON-schema
           # validator that rejects the Istio 1.24 gateway chart's own schema.
-          # sha256 not pinned yet (see the HELM_VERSION and runner checks above): take it from
-          # https://get.helm.sh/helm-v3.16.3-linux-<arch>.tar.gz once that tarball is verified
-          # against its .asc signature on the GitHub release with helm's KEYS.
           curl -sSfL -o "$dl/helm.tar.gz" "https://get.helm.sh/helm-${HELM_VERSION}-linux-${arch}.tar.gz"
+          echo "${helm_sha256}  $dl/helm.tar.gz" | sha256sum -c -
           tar -xzf "$dl/helm.tar.gz" -C "$bin" --strip-components=1 "linux-${arch}/helm"
           echo "$bin" >> "$GITHUB_PATH"
           "$bin/helm" version --short

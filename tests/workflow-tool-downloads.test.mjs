@@ -3,8 +3,8 @@
 //      with an http(s):// URL argument) writes to a named file (never piped into tar),
 //      nothing else on its own logical line uses that file, and the next logical line
 //      is `echo "<sha256>  <file>" | sha256sum -c -`, so nothing is extracted unchecked.
-//      UNCHECKED_ALLOWED lists the downloads that have no sha256 yet. It may only shrink:
-//      the only download it may ever hold is the mesh repository's helm download;
+//      UNCHECKED_ALLOWED lists the downloads that have no sha256 yet. It is empty and
+//      may not grow (helm, its last entry, is pinned since 2026-10-17);
 //   2. each install step runs with stub uname, curl, sha256sum, tar and sudo on PATH for
 //      x86_64 and aarch64 (asset and sha256 for that architecture, checked before tar,
 //      and only members the real archive holds extracted), for riscv64 (::error::,
@@ -28,10 +28,10 @@ after(() => fs.rmSync(tmpRoot, { recursive: true, force: true }));
 
 // --- 1. static scan ----------------------------------------------------------------
 
-// The one download allowed without a sha256: helm in this repository, whose sha256 is
-// not pinned yet. Nothing may be added here; remove the entry once helm is pinned.
-const MAY_ONLY_SHRINK_TO = [{ file: "mesh-manifests.yml", step: "Install validation tools", url: "https://get.helm.sh/" }];
-const UNCHECKED_ALLOWED = [{ file: "mesh-manifests.yml", step: "Install validation tools", url: "https://get.helm.sh/" }];
+// Downloads allowed without a sha256: none. helm, the last one, is pinned; nothing may
+// be added here.
+const MAY_ONLY_SHRINK_TO = [];
+const UNCHECKED_ALLOWED = [];
 
 const SHA_CHECK = /^echo\s+"(?:[0-9a-f]{64}|\$\{?\w+\}?)\s\s(.+)"\s*\|\s*sha256sum\s+-c\s+-$/;
 const unquote = (s) => s.replace(/["']/g, "");
@@ -462,7 +462,7 @@ const ARCHIVE_MEMBERS = {
 // ARCHIVE_MEMBERS: it creates the members it is asked for (all when none is named) in
 // its -C directory after --strip-components, and like GNU tar it exits 2 with "Not found
 // in archive" for a member the archive does not hold.
-function stubs(arch, shaExit = 0) {
+function stubs(arch, shaExit = 0, shaFailsFor = "") {
   const bin = fs.mkdtempSync(path.join(tmpRoot, "bin-"));
   const log = path.join(bin, "calls.log");
   const write = (name, body) => fs.writeFileSync(path.join(bin, name), `#!/usr/bin/env bash\n${body}\n`, { mode: 0o755 });
@@ -473,7 +473,9 @@ function stubs(arch, shaExit = 0) {
 while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift ;; http://*|https://*) url="$1" ;; esac; shift; done
 [ -n "$out" ] && printf '%s\\n' "\${url##*/}" > "$out"; exit 0`,
   );
-  write("sha256sum", `echo "sha256sum $* <<$(cat)" >> "${log}"; exit ${shaExit}`);
+  // shaFailsFor: a file name whose check fails while the others pass.
+  const failFor = shaFailsFor ? `case "$in" in *"${shaFailsFor}") exit 1 ;; esac; ` : "";
+  write("sha256sum", `in="$(cat)"; echo "sha256sum $* <<$in" >> "${log}"; ${failFor}exit ${shaExit}`);
   const held = Object.entries(ARCHIVE_MEMBERS).map(([asset, members]) => `  ${asset}) held=(${members.join(" ")}) ;;`);
   write(
     "tar",
@@ -599,8 +601,9 @@ for (const t of STEPS) {
   });
 }
 
-// "Install validation tools": kustomize, kubeconform and istioctl are pinned and checked;
-// helm is fetched for the runner architecture but has no sha256 yet (UNCHECKED_ALLOWED).
+// "Install validation tools": kustomize, kubeconform, istioctl and helm are pinned and
+// checked. helm's sha256 is the one in helm's own signed helm-v3.16.3-linux-<arch>.tar.gz.sha256sum
+// (detached .asc on the GitHub release, key 672C657BE06B4B30969C4A57461449C25E36B98E).
 const MESH_TOOLS = [
   { bin: "kustomize", asset: { x86_64: "kustomize_v5.5.0_linux_amd64.tar.gz", aarch64: "kustomize_v5.5.0_linux_arm64.tar.gz" },
     sha: { x86_64: "6703a3a70a0c47cf0b37694030b54f1175a9dfeb17b3818b623ed58b9dbc2a77", aarch64: "b4170d1acb8cfacace9f72884bef957ff56efdcd4813b66e7604aabc8b57e93d" } },
@@ -610,14 +613,15 @@ const MESH_TOOLS = [
     sha: { x86_64: "877d629fee03cad68bf0d5561ea9fb64f287af28ec58581b8b6c49e5c650cbc9", aarch64: "264ef6ce29d3ef3789367342c2b6aa11872244b40920a04ac672bb3302e319a7" } },
 ];
 const HELM_DIR = { x86_64: "linux-amd64", aarch64: "linux-arm64" };
+const HELM_SHA = { x86_64: "f5355c79190951eed23c5432a3b920e071f4c00a64f75e077de0dd4cb7b294ea", aarch64: "5bd34ed774df6914b323ff84a0a156ea6ff2ba1eaf0113962fa773f3f9def798" };
 
-test("mesh-manifests.yml 'Install validation tools' fetches each tool for the runner architecture and checks kustomize, kubeconform and istioctl before extracting", () => {
+test("mesh-manifests.yml 'Install validation tools' fetches each tool for the runner architecture and checks its sha256 before extracting", () => {
   const wf = load("mesh-manifests.yml");
   const job = wf.jobs["render-and-validate"];
   const step = job.steps.find((s) => s.name === "Install validation tools");
   assert.ok(step, "step 'Install validation tools' missing");
-  // GitHub sets RUNNER_ENVIRONMENT to github-hosted or self-hosted.
-  const env = { ...wf.env, ...job.env, ...step.env, RUNNER_ENVIRONMENT: "github-hosted" };
+  // Every tool is checked, so the step runs the same on a self-hosted runner.
+  const env = { ...wf.env, ...job.env, ...step.env, RUNNER_ENVIRONMENT: "self-hosted" };
   const istioFile = "deploy/istio/ISTIO_VERSION";
   const pinned = { [istioFile]: fs.readFileSync(path.join(repoRoot, istioFile), "utf8") };
   for (const arch of ["x86_64", "aarch64"]) {
@@ -636,7 +640,11 @@ test("mesh-manifests.yml 'Install validation tools' fetches each tool for the ru
     }
     const helm = path.join(r.runnerTemp, "dl", "helm.tar.gz");
     assert.ok(calls.includes(`curl -sSfL -o ${helm} https://get.helm.sh/helm-${env.HELM_VERSION}-${HELM_DIR[arch]}.tar.gz\n`), calls);
-    assert.ok(calls.includes(`tar -xzf ${helm} -C ${path.join(r.runnerTemp, "bin")} --strip-components=1 ${HELM_DIR[arch]}/helm\n`), calls);
+    const helmCheck = calls.indexOf(`sha256sum -c - <<${HELM_SHA[arch]}  ${helm}\n`);
+    assert.ok(helmCheck >= 0, `helm checked against its ${arch} sha256: ${calls}`);
+    const helmExtract = calls.indexOf(`tar -xzf ${helm} -C ${path.join(r.runnerTemp, "bin")} --strip-components=1 ${HELM_DIR[arch]}/helm\n`);
+    assert.ok(helmExtract >= 0, calls);
+    assert.ok(helmCheck < helmExtract, "helm checked before it is extracted");
     assert.deepEqual(r.path, [path.join(r.runnerTemp, "bin")], "the tool directory is added to GITHUB_PATH");
     for (const b of ["kustomize", "kubeconform", "istioctl", "helm"]) {
       assert.ok(fs.existsSync(path.join(r.runnerTemp, "bin", b)), `${b} is in the GITHUB_PATH directory`);
@@ -647,6 +655,12 @@ test("mesh-manifests.yml 'Install validation tools' fetches each tool for the ru
   const mismatch = runStep(step.run, env, bad.bin, pinned);
   assert.notEqual(mismatch.status, 0, "a checksum mismatch fails the step");
   assert.doesNotMatch(bad.log(), /^tar /m, "nothing is extracted after a mismatch");
+  for (const arch of ["x86_64", "aarch64"]) {
+    const badHelm = stubs(arch, 0, "/dl/helm.tar.gz");
+    const helmMismatch = runStep(step.run, env, badHelm.bin, pinned);
+    assert.notEqual(helmMismatch.status, 0, `a helm checksum mismatch fails the step (${arch})`);
+    assert.doesNotMatch(badHelm.log(), /^tar -xzf \S*\/dl\/helm\.tar\.gz/m, `helm is not extracted after a mismatch (${arch})`);
+  }
   const odd = stubs("riscv64");
   const unsupported = runStep(step.run, env, odd.bin, pinned);
   assert.notEqual(unsupported.status, 0);
@@ -656,10 +670,7 @@ test("mesh-manifests.yml 'Install validation tools' fetches each tool for the ru
     [{ ...env, KUSTOMIZE_VERSION: "v9.9.9" }, pinned, /::error::.*kustomize v9\.9\.9/],
     [{ ...env, KUBECONFORM_VERSION: "v9.9.9" }, pinned, /::error::.*kubeconform v9\.9\.9/],
     [env, { [istioFile]: "1.25.0\n" }, /::error::.*istioctl 1\.25\.0/],
-    // helm, unpinned: another HELM_VERSION, or a runner that is not GitHub-hosted.
-    [{ ...env, HELM_VERSION: "v3.17.0" }, pinned, /::error::helm v3\.17\.0 /],
-    [{ ...env, RUNNER_ENVIRONMENT: "self-hosted" }, pinned, /::error::helm .*RUNNER_ENVIRONMENT=self-hosted/],
-    [Object.fromEntries(Object.entries(env).filter(([k]) => k !== "RUNNER_ENVIRONMENT")), pinned, /::error::helm .*RUNNER_ENVIRONMENT=unset/],
+    [{ ...env, HELM_VERSION: "v3.17.0" }, pinned, /::error::.*helm v3\.17\.0/],
   ];
   for (const [e, files, message] of unpinned) {
     const other = stubs("x86_64");
