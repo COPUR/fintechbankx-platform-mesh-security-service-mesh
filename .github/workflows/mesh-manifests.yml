@@ -31,15 +31,62 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bin="$RUNNER_TEMP/bin"
-          mkdir -p "$bin"
-          curl -sSfL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" | tar -xz -C "$bin"
-          curl -sSfL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" | tar -xz -C "$bin"
+          # Runner architecture -> release asset name, with the sha256 of that asset from
+          # each release's own checksum file (kustomize checksums.txt, kubeconform CHECKSUMS,
+          # istioctl-<version>-linux-<arch>.tar.gz.sha256). Only KUSTOMIZE_VERSION v5.5.0,
+          # KUBECONFORM_VERSION v0.6.7 and deploy/istio/ISTIO_VERSION 1.24.3 are pinned: a
+          # version bump must update these sums too, and any other version fails the step.
           istio_version="$(tr -d '[:space:]' < deploy/istio/ISTIO_VERSION)"
-          curl -sSfL "https://github.com/istio/istio/releases/download/${istio_version}/istioctl-${istio_version}-linux-amd64.tar.gz" | tar -xz -C "$bin"
+          if [ "$KUSTOMIZE_VERSION" != "v5.5.0" ]; then
+            echo "::error::no pinned sha256 for kustomize ${KUSTOMIZE_VERSION}; only v5.5.0 is pinned"
+            exit 1
+          fi
+          if [ "$KUBECONFORM_VERSION" != "v0.6.7" ]; then
+            echo "::error::no pinned sha256 for kubeconform ${KUBECONFORM_VERSION}; only v0.6.7 is pinned"
+            exit 1
+          fi
+          if [ "$istio_version" != "1.24.3" ]; then
+            echo "::error::no pinned sha256 for istioctl ${istio_version} (deploy/istio/ISTIO_VERSION); only 1.24.3 is pinned"
+            exit 1
+          fi
+          case "$(uname -m)" in
+            x86_64)
+              arch=amd64
+              kustomize_sha256=6703a3a70a0c47cf0b37694030b54f1175a9dfeb17b3818b623ed58b9dbc2a77
+              kubeconform_sha256=95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73
+              istioctl_sha256=877d629fee03cad68bf0d5561ea9fb64f287af28ec58581b8b6c49e5c650cbc9
+              ;;
+            aarch64)
+              arch=arm64
+              kustomize_sha256=b4170d1acb8cfacace9f72884bef957ff56efdcd4813b66e7604aabc8b57e93d
+              kubeconform_sha256=dc82f79bb03c5479b1ae5fd4af221e4b5a3111f62bf01a2795d9c5c20fa96644
+              istioctl_sha256=264ef6ce29d3ef3789367342c2b6aa11872244b40920a04ac672bb3302e319a7
+              ;;
+            *)
+              echo "::error::no pinned validation tool builds for runner architecture $(uname -m)"
+              exit 1
+              ;;
+          esac
+          bin="$RUNNER_TEMP/bin"
+          dl="$RUNNER_TEMP/dl"
+          mkdir -p "$bin" "$dl"
+          curl -sSfL -o "$dl/kustomize.tar.gz" \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_${arch}.tar.gz"
+          echo "${kustomize_sha256}  $dl/kustomize.tar.gz" | sha256sum -c -
+          tar -xzf "$dl/kustomize.tar.gz" -C "$bin" kustomize
+          curl -sSfL -o "$dl/kubeconform.tar.gz" \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-${arch}.tar.gz"
+          echo "${kubeconform_sha256}  $dl/kubeconform.tar.gz" | sha256sum -c -
+          tar -xzf "$dl/kubeconform.tar.gz" -C "$bin" kubeconform
+          curl -sSfL -o "$dl/istioctl.tar.gz" \
+            "https://github.com/istio/istio/releases/download/${istio_version}/istioctl-${istio_version}-linux-${arch}.tar.gz"
+          echo "${istioctl_sha256}  $dl/istioctl.tar.gz" | sha256sum -c -
+          tar -xzf "$dl/istioctl.tar.gz" -C "$bin" istioctl
           # Pin helm: the runner's preinstalled helm uses a newer JSON-schema
           # validator that rejects the Istio 1.24 gateway chart's own schema.
-          curl -sSfL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar -xz -C "$bin" --strip-components=1 linux-amd64/helm
+          # sha256 not pinned yet: get the value from https://get.helm.sh/helm-v3.16.3-linux-<arch>.tar.gz.sha256sum
+          curl -sSfL -o "$dl/helm.tar.gz" "https://get.helm.sh/helm-${HELM_VERSION}-linux-${arch}.tar.gz"
+          tar -xzf "$dl/helm.tar.gz" -C "$bin" --strip-components=1 "linux-${arch}/helm"
           echo "$bin" >> "$GITHUB_PATH"
           "$bin/helm" version --short
 
