@@ -63,6 +63,7 @@ selected per workload, not per namespace.
 | Traffic | `generated/destination-rules.yaml`, `generated/service-entries.yaml`, `generated/sidecars.yaml`, `generated/ingress-routing.yaml` | See resilience mapping |
 | NetworkPolicy | `generated/network-policies.yaml` | Default-deny, DNS, istiod 15012, node health 15020/15021, scraping, edge-derived ingress/egress, Aurora/MSK/VPC-endpoint CIDRs; Aurora egress keys on `app.kubernetes.io/name`, MSK egress on the name plus `app.kubernetes.io/component=service` (see "Database migration Jobs") |
 | Secrets | `k8s/platform/external-secrets/`, `deploy/kustomize/base/ingress-tls-externalsecret.yaml`, `deploy/kustomize/base/generated/externalsecret-admission.yaml` | `aws-secrets-manager` (IRSA SA `external-secrets`; conditions: namespaces labelled `fintechbankx.io/namespace-kind=service` and `observability`); `aws-secrets-manager-platform` (IRSA SA `external-secrets-platform`; conditions: `cert-manager`, `istio-ingress`, `identity`) for the internal CA, ingress TLS (`<env>/platform/ingress-tls`), corporate directory CA and Keycloak material; ValidatingAdmissionPolicy `fintechbankx-externalsecret-scope` + Deny binding: outside the platform-store namespaces an ExternalSecret must use `aws-secrets-manager` and read only `<env>/<slug>/` keys, where in a service namespace `<slug>` is its `app.kubernetes.io/name` label and one of that namespace's service accounts (payments holds four), and no remote key may end in `/db-import` (the operator import credential of terraform-modules `operator-db-access` is never synced into a cluster). Validator rule R10 checks the structure; the CEL runs only in a kube-apiserver |
+| Deploy RBAC | `generated/deploy-rbac.yaml` | Role and RoleBinding `fintechbankx-deploy` in each `kind: service` namespace for the group `fintechbankx:deploy:<namespace>` (terraform-modules `github-oidc` EKS access entry); Helm release verbs on the chart kinds, no Secrets; see "Deploy RBAC" |
 | PKI install | `deploy/cert-manager/` (versions, Helm values), `deploy/kustomize/platform-pki/<env>/`, `components/platform-params` | cert-manager and trust-manager installed by this repo before Istio; see "Platform PKI install" |
 | Internal TLS | `k8s/platform/cert-manager/` | ClusterIssuer `fintechbankx-internal-ca` (CA issuer; key pair synced by ExternalSecret from `<env>/platform/internal-ca` into ns `cert-manager`, no material in git); trust-manager Bundle `fintechbankx-internal-ca` -> ConfigMap `fintechbankx-internal-ca` (key `ca.crt`) in every namespace labelled `fintechbankx.io/namespace-kind` |
 | Corporate directory (prod only) | `deploy/kustomize/components/corporate-directory/` | Bundle `corporate-directory-ca` -> ConfigMap in `identity` (source: ExternalSecret from `<env>/platform/corporate-directory-ca`); ServiceEntry + NetworkPolicy for Keycloak -> `DIRECTORY_HOST:636` (LDAPS) |
@@ -506,6 +507,51 @@ in the file). Both pulls ran on GitHub-hosted runners; no pull from a network
 outside GitHub has been compared yet.
 
 Not verified: no cluster install has been run.
+
+## Deploy RBAC (Proposed)
+
+terraform-modules `modules/github-oidc` gives each service deploy role an EKS
+access entry with Kubernetes group `fintechbankx:deploy:<namespace>` and no
+access policy. `generated/deploy-rbac.yaml` binds that group, in each
+`kind: service` namespace of the contract and only there, to a namespaced Role
+`fintechbankx-deploy` (RoleBinding of the same name; the subject is that one
+group). The rules are what cicd-templates `helm-deploy.yml` needs for
+`helm upgrade --install --atomic --wait --history-max 10` and `helm history`
+on the kinds the service charts render, surveyed with `helm template` and kept
+in `tests/fixtures/deploy-chart-resources.json`:
+
+- get, list, watch, create, update, patch, delete on Deployments, Services,
+  ServiceAccounts, ConfigMaps, HorizontalPodAutoscalers, PodDisruptionBudgets,
+  Jobs and CronJobs (migration and history-guard hooks, the products check)
+  and ExternalSecrets;
+- get, list, watch on Pods, ReplicaSets and Events (core and
+  `events.k8s.io`), for `--wait`, hooks and diagnosis.
+
+Nothing else: no wildcard, no `escalate`, `bind` or `impersonate`, no RBAC,
+NetworkPolicy, `monitoring.coreos.com`, Istio, SecretStore or
+ClusterSecretStore kinds, no `pods/exec`, `pods/log`, `pods/attach` or
+`pods/portforward`, and nothing cluster-scoped. A chart that turns on its
+NetworkPolicy or ServiceMonitor opt-in fails to deploy: this repo owns network
+policy, and observability scrapes with its PodMonitor.
+`tests/deploy-rbac.test.mjs` checks all of this.
+
+No Secrets at all. Helm's default storage driver keeps each release in a
+Secret; `helm-deploy.yml` sets `HELM_DRIVER=configmap` on its deploy job, so
+releases are ConfigMaps (covered above). Run `helm rollback`, `helm history` or
+`helm status` by hand with `HELM_DRIVER=configmap` too. The charts never render
+a Secret: ExternalSecrets create them through External Secrets Operator, inside
+the keys `fintechbankx-externalsecret-scope` allows.
+
+Residual risk: a deploy group can create pods (through Deployments, Jobs and
+CronJobs) that mount any Secret of its namespace, or run as any ServiceAccount
+of it, and so read what it cannot `get`. Kubernetes RBAC cannot prevent that.
+The controls are the cosign signature verification of the image digest in
+`helm-deploy.yml` (only images built and signed by the platform's
+`container-image.yml` are deployed) and admission control on pod specs, which
+no platform repository defines yet (the only admission policy here is the
+ExternalSecret scope).
+
+Not verified: no cluster has run a deploy with this Role.
 
 ## Validation
 

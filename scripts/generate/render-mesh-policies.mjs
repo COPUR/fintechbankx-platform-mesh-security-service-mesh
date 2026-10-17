@@ -1159,6 +1159,68 @@ function externalSecretAdmission(contract) {
   return [policy, binding];
 }
 
+// ---------------------------------------------------------------- deploy RBAC
+// terraform-modules github-oidc gives each service deploy role an EKS access
+// entry with Kubernetes group fintechbankx:deploy:<namespace> and no access
+// policy. Here each kind: service namespace binds its own group (and only that
+// one) to a namespaced Role with what helm upgrade --install --atomic --wait
+// (cicd-templates helm-deploy.yml) needs for the kinds the service charts
+// render (tests/fixtures/deploy-chart-resources.json). Nothing cluster-scoped,
+// no wildcards, no Secrets: helm-deploy.yml keeps releases in ConfigMaps
+// (HELM_DRIVER=configmap). Not granted: NetworkPolicy and ServiceMonitor (chart
+// opt-ins, off by default: this repo owns network policy, observability scrapes
+// with a PodMonitor), RBAC, Istio and secret-store kinds, pods/exec, pods/log,
+// pods/attach and pods/portforward.
+const DEPLOY_ROLE = 'fintechbankx-deploy';
+const DEPLOY_GROUP_PREFIX = 'fintechbankx:deploy:';
+const RBAC_GROUP = 'rbac.authorization.k8s.io';
+// Install, upgrade (get + three-way patch, update on replace), --atomic
+// rollback and uninstall, hook delete policies, and list/watch for --wait.
+const RELEASE_VERBS = ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete'];
+const READ_VERBS = ['get', 'list', 'watch'];
+const DEPLOY_RULES = [
+  // Every chart's API workload.
+  { apiGroups: ['apps'], resources: ['deployments'], verbs: RELEASE_VERBS },
+  // configmaps: chart config and the Helm release records (HELM_DRIVER=configmap);
+  // serviceaccounts: the workload's account and the migration hook's own account
+  // (accounts ledger); services: every chart's ClusterIP Service.
+  { apiGroups: [''], resources: ['configmaps', 'serviceaccounts', 'services'], verbs: RELEASE_VERBS },
+  // autoscaling/v2 HPA of every chart (on by default).
+  { apiGroups: ['autoscaling'], resources: ['horizontalpodautoscalers'], verbs: RELEASE_VERBS },
+  // jobs: Flyway migration and history-guard gate hook Jobs (created, watched until
+  // done, deleted by hook-delete-policy); cronjobs: the products history-guard check.
+  { apiGroups: ['batch'], resources: ['cronjobs', 'jobs'], verbs: RELEASE_VERBS },
+  // The chart's ExternalSecrets (app and migration credentials); the store and the
+  // <env>/<slug>/ keys are pinned by fintechbankx-externalsecret-scope.
+  { apiGroups: ['external-secrets.io'], resources: ['externalsecrets'], verbs: RELEASE_VERBS },
+  // policy/v1 PDB of every chart (on by default).
+  { apiGroups: ['policy'], resources: ['poddisruptionbudgets'], verbs: RELEASE_VERBS },
+  // Read-only: helm --wait reads the Deployment's new ReplicaSet and its pods;
+  // events and pods explain a failed rollout or hook. No pod subresources.
+  { apiGroups: [''], resources: ['events', 'pods'], verbs: READ_VERBS },
+  { apiGroups: ['apps'], resources: ['replicasets'], verbs: READ_VERBS },
+  { apiGroups: ['events.k8s.io'], resources: ['events'], verbs: READ_VERBS },
+];
+
+function deployRbac(contract) {
+  return serviceNamespaces(contract).flatMap((n) => [
+    {
+      apiVersion: `${RBAC_GROUP}/v1`,
+      kind: 'Role',
+      metadata: { name: DEPLOY_ROLE, namespace: n.name },
+      // Fresh arrays per rule, so the YAML has no anchors.
+      rules: DEPLOY_RULES.map((r) => ({ apiGroups: [...r.apiGroups], resources: [...r.resources], verbs: [...r.verbs] })),
+    },
+    {
+      apiVersion: `${RBAC_GROUP}/v1`,
+      kind: 'RoleBinding',
+      metadata: { name: DEPLOY_ROLE, namespace: n.name },
+      subjects: [{ kind: 'Group', apiGroup: RBAC_GROUP, name: `${DEPLOY_GROUP_PREFIX}${n.name}` }],
+      roleRef: { apiGroup: RBAC_GROUP, kind: 'Role', name: DEPLOY_ROLE },
+    },
+  ]);
+}
+
 // ----------------------------------------------------- workload references
 // A workload reference <ns>/<name> (name defaults to the service account)
 // keys a workload's policies, its exceptions.workloadInjection entry and its
@@ -1356,6 +1418,7 @@ export function render(contract = loadContract()) {
     'ingress-routing.yaml': ingressRouting(contract),
     'network-policies.yaml': networkPolicies(contract),
     'externalsecret-admission.yaml': externalSecretAdmission(contract),
+    'deploy-rbac.yaml': deployRbac(contract),
   };
 }
 
