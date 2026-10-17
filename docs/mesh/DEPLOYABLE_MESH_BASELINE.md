@@ -64,6 +64,7 @@ selected per workload, not per namespace.
 | NetworkPolicy | `generated/network-policies.yaml` | Default-deny, DNS, istiod 15012, node health 15020/15021, scraping, edge-derived ingress/egress, Aurora/MSK/VPC-endpoint CIDRs; Aurora egress keys on `app.kubernetes.io/name`, MSK egress on the name plus `app.kubernetes.io/component=service` (see "Database migration Jobs") |
 | Secrets | `k8s/platform/external-secrets/`, `deploy/kustomize/base/ingress-tls-externalsecret.yaml`, `deploy/kustomize/base/generated/externalsecret-admission.yaml` | `aws-secrets-manager` (IRSA SA `external-secrets`; conditions: namespaces labelled `fintechbankx.io/namespace-kind=service` and `observability`); `aws-secrets-manager-platform` (IRSA SA `external-secrets-platform`; conditions: `cert-manager`, `istio-ingress`, `identity`) for the internal CA, ingress TLS (`<env>/platform/ingress-tls`), corporate directory CA and Keycloak material; ValidatingAdmissionPolicy `fintechbankx-externalsecret-scope` + Deny binding: outside the platform-store namespaces an ExternalSecret must use `aws-secrets-manager` and read only `<env>/<slug>/` keys, where in a service namespace `<slug>` is its `app.kubernetes.io/name` label and one of that namespace's service accounts (payments holds four), and no remote key may end in `/db-import` (the operator import credential of terraform-modules `operator-db-access` is never synced into a cluster). Validator rule R10 checks the structure; the CEL runs only in a kube-apiserver |
 | Deploy RBAC | `generated/deploy-rbac.yaml` | Role and RoleBinding `fintechbankx-deploy` in each `kind: service` namespace for the group `fintechbankx:deploy:<namespace>` (terraform-modules `github-oidc` EKS access entry); Helm release verbs on the chart kinds, no Secrets; see "Deploy RBAC" |
+| Workload admission | `generated/workload-admission.yaml` | ValidatingAdmissionPolicies + Deny bindings in `kind: service` namespaces: `fintechbankx-service-pod-security` (no privileged, host namespaces, hostPath, hostPort; capabilities only NET_ADMIN/NET_RAW on `istio-init`), `fintechbankx-service-service-type` (ClusterIP, no externalIPs), `fintechbankx-deploy-trust-anchors` (deploy groups may not write the CA ConfigMaps); see "Workload admission" |
 | PKI install | `deploy/cert-manager/` (versions, Helm values), `deploy/kustomize/platform-pki/<env>/`, `components/platform-params` | cert-manager and trust-manager installed by this repo before Istio; see "Platform PKI install" |
 | Internal TLS | `k8s/platform/cert-manager/` | ClusterIssuer `fintechbankx-internal-ca` (CA issuer; key pair synced by ExternalSecret from `<env>/platform/internal-ca` into ns `cert-manager`, no material in git); trust-manager Bundle `fintechbankx-internal-ca` -> ConfigMap `fintechbankx-internal-ca` (key `ca.crt`) in every namespace labelled `fintechbankx.io/namespace-kind` |
 | Corporate directory (prod only) | `deploy/kustomize/components/corporate-directory/` | Bundle `corporate-directory-ca` -> ConfigMap in `identity` (source: ExternalSecret from `<env>/platform/corporate-directory-ca`); ServiceEntry + NetworkPolicy for Keycloak -> `DIRECTORY_HOST:636` (LDAPS) |
@@ -525,7 +526,9 @@ in `tests/fixtures/deploy-chart-resources.json`:
   Jobs and CronJobs (migration and history-guard hooks, the products check)
   and ExternalSecrets;
 - get, list, watch on Pods, ReplicaSets and Events (core and
-  `events.k8s.io`), for `--wait`, hooks and diagnosis.
+  `events.k8s.io`). Helm 3.16 `--wait` itself reads only the Deployment and
+  lists its ReplicaSets, and hooks list and watch Jobs; Pods and Events are
+  read-only access for diagnosing a failed rollout or hook.
 
 Nothing else: no wildcard, no `escalate`, `bind` or `impersonate`, no RBAC,
 NetworkPolicy, `monitoring.coreos.com`, Istio, SecretStore or
@@ -538,18 +541,94 @@ policy, and observability scrapes with its PodMonitor.
 No Secrets at all. Helm's default storage driver keeps each release in a
 Secret; `helm-deploy.yml` sets `HELM_DRIVER=configmap` on its deploy job, so
 releases are ConfigMaps (covered above). Run `helm rollback`, `helm history` or
-`helm status` by hand with `HELM_DRIVER=configmap` too. The charts never render
-a Secret: ExternalSecrets create them through External Secrets Operator, inside
-the keys `fintechbankx-externalsecret-scope` allows.
+`helm status` by hand with `HELM_DRIVER=configmap` too. A chart may neither
+render nor read a Secret: ExternalSecrets create them through External Secrets
+Operator, inside the keys `fintechbankx-externalsecret-scope` allows. The
+products catalog chart (open-products-catalog-service) does read two: its
+Deployment template checksums the synced DB Secrets with `lookup "v1" "Secret"`,
+and Helm aborts the render on the Forbidden answer, so that chart does not
+deploy with this Role until the lookup leaves the chart (fixture
+`secretLookups`). `helm-deploy.yml` refuses a chart that calls `lookup` in its
+validate job, before any credentials, because that job renders without a
+cluster and so never sees what `lookup` would return.
 
-Residual risk: a deploy group can create pods (through Deployments, Jobs and
-CronJobs) that mount any Secret of its namespace, or run as any ServiceAccount
-of it, and so read what it cannot `get`. Kubernetes RBAC cannot prevent that.
-The controls are the cosign signature verification of the image digest in
-`helm-deploy.yml` (only images built and signed by the platform's
-`container-image.yml` are deployed) and admission control on pod specs, which
-no platform repository defines yet (the only admission policy here is the
-ExternalSecret scope).
+### Workload admission
+
+RBAC cannot look inside the objects it allows. `generated/workload-admission.yaml`
+adds three ValidatingAdmissionPolicies with Deny bindings and
+`failurePolicy: Fail` (`tests/workload-admission.test.mjs` runs their CEL):
+
+- `fintechbankx-service-pod-security`, on Pods and every pod-template kind
+  (Deployments, ReplicaSets, StatefulSets, DaemonSets, Jobs, CronJobs) in
+  `kind: service` namespaces: no privileged container, no `hostNetwork`,
+  `hostPID` or `hostIPC`, no `hostPath` volume, no `hostPort`, and no added
+  capability except `NET_ADMIN` and `NET_RAW` on the `istio-init` init
+  container. Pod Security Admission labels are not used: Istio runs without
+  CNI, so `istio-init` needs those two capabilities and `baseline` would
+  refuse every injected pod.
+- `fintechbankx-service-service-type`: Services in `kind: service` namespaces
+  are `ClusterIP` (headless included) without `spec.externalIPs`. No
+  LoadBalancer or NodePort, and no externalIPs, which kube-proxy routes
+  cluster-wide (CVE-2020-8554) and could capture traffic other namespaces send
+  to Aurora or MSK addresses.
+- `fintechbankx-deploy-trust-anchors`: the `fintechbankx:deploy:*` groups may
+  not create, update or delete the ConfigMaps `rds-ca-bundle` and
+  `fintechbankx-internal-ca` (trust-manager Bundles; the JDBC `sslrootcert`
+  and the internal CA), `istio-ca-root-cert` (istiod) or `kube-root-ca.crt`
+  in a service namespace. The controllers that keep them are not restricted.
+
+`fintechbankx-externalsecret-scope` also requires, in service namespaces, that
+an ExternalSecret's target is an Opaque Secret it owns: `target.template.type`
+absent or `Opaque`, no template annotation
+`kubernetes.io/service-account.name` (the token controller would mint a
+non-expiring token for that account) and `target.creationPolicy` absent or
+`Owner` (no Merge into a Secret it does not own).
+
+### Residual risk
+
+- Before `workload-admission.yaml` is in force (it ships in the same base as
+  the Role; a cluster that has the Role without it, or a policy that is
+  removed), a deploy group is not namespace-scoped at all: through a
+  Deployment, Job or CronJob it can run a privileged, `hostPath: /` or
+  `hostNetwork` pod, which is root on the node, with the kubelet credentials,
+  the Secrets of every other namespace's pods on that node and the node's IAM
+  role.
+- With the policies, a deploy group can still create pods that mount any
+  Secret of its namespace or run as any ServiceAccount of it (and use that
+  account's IRSA role), and so read what it cannot `get`. Kubernetes RBAC
+  cannot prevent that. A container named `istio-init` may add `NET_ADMIN` and
+  `NET_RAW` in its own pod's network namespace.
+- A namespace is shared by every service in it, and the group is per
+  namespace: payments holds four services and open-finance seven, each
+  released from its own repository with its own deploy role, all in the same
+  group. Any one of those pipelines can patch or delete a sibling's
+  Deployment, Service, HPA, PDB, Job or CronJob and its Helm release
+  ConfigMaps, create an ExternalSecret labelled with the sibling's
+  `app.kubernetes.io/name` and sync the sibling's `<env>/<sibling>/` keys
+  (`db-app`, `db-migration`), and run pods as the sibling's ServiceAccount.
+  The admission slug comes from a label the creator sets, not from who
+  creates it. This is accepted for now: isolation is per namespace, not per
+  service. Per-service isolation needs per-service groups
+  (`fintechbankx:deploy:<namespace>:<service>`) from `github-oidc`, Roles
+  narrowed per service, and an ExternalSecret scope keyed on
+  `request.userInfo.groups`; none of that exists.
+- What runs is not pinned by the platform. The cosign verification in
+  `helm-deploy.yml` checks only `inputs.image-digest`, against a certificate
+  identity and source repository the caller may override. It is a control
+  only while the deploy role can be used by `helm-deploy.yml` alone, which
+  needs terraform-modules `bind_platform_workflow_ref = true`; that defaults to
+  `false` and its rollout is pending, so today any job in the service
+  repository's GitHub environment can assume the deploy role and run `kubectl`
+  or `helm` directly. Within `helm-deploy.yml`, the validate job refuses a
+  render in which any container image is not
+  `<image-repository>@<image-digest>`; the accounts ledger chart (2db7a04) and
+  the products catalog chart render `repository:tag` and fail that check until
+  they use the digest. No admission-side image verification exists.
+- Services: a deploy group can still create a ClusterIP Service that selects a
+  sibling's pods. ConfigMaps other than the trust anchors stay writable.
+  `target.name` of an ExternalSecret is not restricted; what ESO does with an
+  existing Secret of that name that it does not own has not been checked on a
+  cluster.
 
 Not verified: no cluster has run a deploy with this Role.
 

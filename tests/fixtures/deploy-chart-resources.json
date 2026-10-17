@@ -1,5 +1,5 @@
 {
-  "description": "Kinds the service charts render (helm template, kube-version 1.31.0), as (apiGroup, resource) pairs the deploy Role must cover. Surveyed 2026-10-17 from local clones that may not be at their PR heads. optIn lists kinds a chart renders only behind a flag that is off by default; the platform owns them and the Role grants none of them.",
+  "description": "Kinds the service charts render (helm template, kube-version 1.31.0), as (apiGroup, resource) pairs the deploy Role must cover. Surveyed 2026-10-17 from local clones that may not be at their PR heads. optIn lists kinds a chart renders only behind a flag that is off by default; the platform owns them and the Role grants none of them. secretLookups lists charts that read a Secret with lookup (Helm aborts on Forbidden, so they do not deploy with this Role until the lookup is removed from the chart).",
   "charts": {
     "fintechbankx-platform-delivery-iac-cicd-templates charts/fintechbankx-service (150aaf6; ci values, skeleton defaults)": [
       "apps/v1/Deployment",
@@ -36,6 +36,9 @@
     "fintechbankx-openfinance-{consent-auth-service, corporate-data-business-financial, open-data-atm-directory, payee-metadata-banking-metadata, payee-metadata-payee-verification, retail-data-personal-financial} infrastructure/helm/chart (legacy, superseded by the reference chart)": [
       "apps/v1/Deployment"
     ]
+  },
+  "secretLookups": {
+    "fintechbankx-openfinance-open-data-products-catalog deploy/helm/open-products-catalog-service": "templates/deployment.yaml:38 lookup \"v1\" \"Secret\" twice (checksum/secret of the DB and migration Secrets), at 6b168a7 and on its PR branch"
   },
   "resources": [
     {

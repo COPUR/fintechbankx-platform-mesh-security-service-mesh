@@ -1055,7 +1055,7 @@ function externalSecretAdmission(contract) {
         'fintechbankx.io/purpose':
           `ExternalSecrets outside ${sec.platformStoreNamespaces.join(', ')} must use ClusterSecretStore ${sec.serviceStore} ` +
           'and read only <env>/<slug>/ keys; in service namespaces <slug> is the app.kubernetes.io/name label and must be ' +
-          'a service account of that namespace.',
+          'a service account of that namespace, and the target is an Opaque Secret the ExternalSecret owns.',
       },
     },
     spec: {
@@ -1147,6 +1147,33 @@ function externalSecretAdmission(contract) {
             "variables.keys.filter(k, k.endsWith('/db-import')).join(', ')",
           reason: 'Forbidden',
         },
+        // spec.target in service namespaces: ESO writes the Secret with its own
+        // rights. A service-account-token Secret (type or annotation) would make
+        // the token controller mint a non-expiring token for any account of the
+        // namespace; Merge writes into a Secret this ExternalSecret does not own,
+        // Orphan and None leave Secrets nothing owns.
+        {
+          expression:
+            '!variables.serviceNamespace || !has(object.spec.target) || !has(object.spec.target.template) || ' +
+            "!has(object.spec.target.template.type) || object.spec.target.template.type == 'Opaque'",
+          messageExpression: "'spec.target.template.type must be absent or Opaque in service namespaces; got ' + object.spec.target.template.type",
+          reason: 'Forbidden',
+        },
+        {
+          expression:
+            '!variables.serviceNamespace || !has(object.spec.target) || !has(object.spec.target.template) || ' +
+            '!has(object.spec.target.template.metadata) || !has(object.spec.target.template.metadata.annotations) || ' +
+            "!('kubernetes.io/service-account.name' in object.spec.target.template.metadata.annotations)",
+          message: 'spec.target.template may not set the annotation kubernetes.io/service-account.name',
+          reason: 'Forbidden',
+        },
+        {
+          expression:
+            '!variables.serviceNamespace || !has(object.spec.target) || !has(object.spec.target.creationPolicy) || ' +
+            "object.spec.target.creationPolicy == 'Owner'",
+          messageExpression: "'spec.target.creationPolicy must be Owner (the default) in service namespaces; got ' + object.spec.target.creationPolicy",
+          reason: 'Forbidden',
+        },
       ],
     },
   };
@@ -1167,7 +1194,9 @@ function externalSecretAdmission(contract) {
 // (cicd-templates helm-deploy.yml) needs for the kinds the service charts
 // render (tests/fixtures/deploy-chart-resources.json). Nothing cluster-scoped,
 // no wildcards, no Secrets: helm-deploy.yml keeps releases in ConfigMaps
-// (HELM_DRIVER=configmap). Not granted: NetworkPolicy and ServiceMonitor (chart
+// (HELM_DRIVER=configmap), and a chart that reads a Secret with lookup fails
+// (fixture secretLookups). What the objects contain is left to the
+// ValidatingAdmissionPolicies of workload-admission.yaml. Not granted: NetworkPolicy and ServiceMonitor (chart
 // opt-ins, off by default: this repo owns network policy, observability scrapes
 // with a PodMonitor), RBAC, Istio and secret-store kinds, pods/exec, pods/log,
 // pods/attach and pods/portforward.
@@ -1195,8 +1224,9 @@ const DEPLOY_RULES = [
   { apiGroups: ['external-secrets.io'], resources: ['externalsecrets'], verbs: RELEASE_VERBS },
   // policy/v1 PDB of every chart (on by default).
   { apiGroups: ['policy'], resources: ['poddisruptionbudgets'], verbs: RELEASE_VERBS },
-  // Read-only: helm --wait reads the Deployment's new ReplicaSet and its pods;
-  // events and pods explain a failed rollout or hook. No pod subresources.
+  // Read-only: helm 3.16 --wait lists the Deployment's ReplicaSets (hooks list
+  // and watch Jobs, granted above); pods and events are for diagnosing a failed
+  // rollout or hook, helm reads neither. No pod subresources.
   { apiGroups: [''], resources: ['events', 'pods'], verbs: READ_VERBS },
   { apiGroups: ['apps'], resources: ['replicasets'], verbs: READ_VERBS },
   { apiGroups: ['events.k8s.io'], resources: ['events'], verbs: READ_VERBS },
@@ -1219,6 +1249,172 @@ function deployRbac(contract) {
       roleRef: { apiGroup: RBAC_GROUP, kind: 'Role', name: DEPLOY_ROLE },
     },
   ]);
+}
+
+// ------------------------------------------------------- workload admission
+// What the deploy Role cannot see: the inside of the objects it lets a
+// service pipeline write. Three ValidatingAdmissionPolicies (Deny bindings,
+// failurePolicy Fail) for kind: service namespaces:
+// - pod security: no privileged container, hostNetwork/hostPID/hostIPC,
+//   hostPath volume or hostPort, and no added capability except NET_ADMIN and
+//   NET_RAW on the istio-init init container (Istio runs without CNI, so
+//   Pod Security Admission baseline would refuse every injected pod). Checked
+//   on Pods (after sidecar injection) and on every pod-template kind, so a bad
+//   Deployment, Job or CronJob fails at helm upgrade, not later in its
+//   ReplicaSet;
+// - Service type: ClusterIP only (headless included), no externalIPs
+//   (CVE-2020-8554: kube-proxy routes them cluster-wide), no LoadBalancer or
+//   NodePort;
+// - trust anchors: the fintechbankx:deploy:* groups may not create, update or
+//   delete the CA ConfigMaps that trust-manager (Bundles rds-ca-bundle and
+//   fintechbankx-internal-ca), istiod and kube-controller-manager keep in
+//   every namespace. The controllers themselves are not restricted.
+const SERVICE_NS_SELECTOR = { matchLabels: { 'fintechbankx.io/namespace-kind': 'service' } };
+const TRUST_ANCHOR_CONFIGMAPS = ['rds-ca-bundle', 'fintechbankx-internal-ca', 'istio-ca-root-cert', 'kube-root-ca.crt'];
+const ISTIO_INIT_CAPABILITIES = ['NET_ADMIN', 'NET_RAW'];
+
+function admissionPolicy(name, purpose, spec) {
+  return [
+    {
+      apiVersion: 'admissionregistration.k8s.io/v1',
+      kind: 'ValidatingAdmissionPolicy',
+      metadata: { name, annotations: { 'fintechbankx.io/purpose': purpose } },
+      spec: { failurePolicy: 'Fail', ...spec },
+    },
+    {
+      apiVersion: 'admissionregistration.k8s.io/v1',
+      kind: 'ValidatingAdmissionPolicyBinding',
+      metadata: { name },
+      spec: { policyName: name, validationActions: ['Deny'] },
+    },
+  ];
+}
+
+const writes = (apiGroups, resources) => ({ apiGroups, apiVersions: ['*'], operations: ['CREATE', 'UPDATE'], resources });
+// A field that is set and true; absent means false.
+const isTrue = (path) => `has(${path}) && ${path}`;
+const names = (list) => `${list}.map(c, c.name).join(', ')`;
+
+function workloadAdmission() {
+  const sc = 'has(c.securityContext)';
+  const added = `${sc} && has(c.securityContext.capabilities) && has(c.securityContext.capabilities.add) && c.securityContext.capabilities.add.size() > 0`;
+  const privileged = `${sc} && ${isTrue('c.securityContext.privileged')}`;
+  const hostPort = 'has(c.ports) && c.ports.exists(p, has(p.hostPort) && p.hostPort != 0)';
+  const istioInitOnly = `c.name == 'istio-init' && c.securityContext.capabilities.add.all(k, k in [${ISTIO_INIT_CAPABILITIES.map(cel).join(', ')}])`;
+  const podSecurity = admissionPolicy(
+    'fintechbankx-service-pod-security',
+    'Pods and pod templates in service namespaces: no privileged container, host namespace, hostPath volume or hostPort, ' +
+      'and no added capability except NET_ADMIN and NET_RAW on the istio-init init container.',
+    {
+      matchConstraints: {
+        resourceRules: [
+          writes([''], ['pods']),
+          writes(['apps'], ['daemonsets', 'deployments', 'replicasets', 'statefulsets']),
+          writes(['batch'], ['cronjobs', 'jobs']),
+        ],
+        namespaceSelector: SERVICE_NS_SELECTOR,
+      },
+      variables: [
+        {
+          name: 'spec',
+          expression:
+            "object.kind == 'Pod' ? object.spec : object.kind == 'CronJob' ? object.spec.jobTemplate.spec.template.spec : object.spec.template.spec",
+        },
+        { name: 'init', expression: 'has(variables.spec.initContainers) ? variables.spec.initContainers : []' },
+        {
+          name: 'main',
+          expression:
+            '(has(variables.spec.containers) ? variables.spec.containers : []) + ' +
+            '(has(variables.spec.ephemeralContainers) ? variables.spec.ephemeralContainers : [])',
+        },
+        { name: 'all', expression: 'variables.init + variables.main' },
+      ],
+      validations: [
+        {
+          expression: `!variables.all.exists(c, ${privileged})`,
+          messageExpression: `'privileged containers are not allowed in service namespaces: ' + ${names(`variables.all.filter(c, ${privileged})`)}`,
+          reason: 'Forbidden',
+        },
+        {
+          expression: `!(${isTrue('variables.spec.hostNetwork')}) && !(${isTrue('variables.spec.hostPID')}) && !(${isTrue('variables.spec.hostIPC')})`,
+          message: 'hostNetwork, hostPID and hostIPC are not allowed in service namespaces',
+          reason: 'Forbidden',
+        },
+        {
+          expression: '!has(variables.spec.volumes) || variables.spec.volumes.all(v, !has(v.hostPath))',
+          messageExpression: `'hostPath volumes are not allowed in service namespaces: ' + variables.spec.volumes.filter(v, has(v.hostPath)).map(v, v.name).join(', ')`,
+          reason: 'Forbidden',
+        },
+        {
+          expression: `!variables.all.exists(c, ${hostPort})`,
+          messageExpression: `'hostPort is not allowed in service namespaces: ' + ${names(`variables.all.filter(c, ${hostPort})`)}`,
+          reason: 'Forbidden',
+        },
+        {
+          expression: `!variables.main.exists(c, ${added})`,
+          messageExpression: `'containers may not add capabilities in service namespaces: ' + ${names(`variables.main.filter(c, ${added})`)}`,
+          reason: 'Forbidden',
+        },
+        {
+          expression: `variables.init.all(c, !(${added}) || ${istioInitOnly})`,
+          messageExpression:
+            `'only the istio-init init container may add capabilities, and only ${ISTIO_INIT_CAPABILITIES.join(' and ')}: ' + ` +
+            names(`variables.init.filter(c, (${added}) && !(${istioInitOnly}))`),
+          reason: 'Forbidden',
+        },
+      ],
+    },
+  );
+  const serviceType = admissionPolicy(
+    'fintechbankx-service-service-type',
+    'Services in service namespaces are ClusterIP (headless included) without externalIPs.',
+    {
+      matchConstraints: {
+        resourceRules: [{ apiGroups: [''], apiVersions: ['v1'], operations: ['CREATE', 'UPDATE'], resources: ['services'] }],
+        namespaceSelector: SERVICE_NS_SELECTOR,
+      },
+      validations: [
+        {
+          expression: "!has(object.spec.type) || object.spec.type == 'ClusterIP'",
+          messageExpression: "'Services in service namespaces must be type ClusterIP; got ' + object.spec.type",
+          reason: 'Forbidden',
+        },
+        {
+          expression: '!has(object.spec.externalIPs) || object.spec.externalIPs.size() == 0',
+          message: 'spec.externalIPs is not allowed in service namespaces (kube-proxy would route those IPs cluster-wide)',
+          reason: 'Forbidden',
+        },
+      ],
+    },
+  );
+  const trustAnchors = admissionPolicy(
+    'fintechbankx-deploy-trust-anchors',
+    `The fintechbankx:deploy:* groups may not create, update or delete the trust-anchor ConfigMaps ${TRUST_ANCHOR_CONFIGMAPS.join(', ')}.`,
+    {
+      matchConstraints: {
+        resourceRules: [
+          {
+            apiGroups: [''],
+            apiVersions: ['v1'],
+            operations: ['CREATE', 'UPDATE', 'DELETE'],
+            resources: ['configmaps'],
+            resourceNames: TRUST_ANCHOR_CONFIGMAPS,
+          },
+        ],
+        namespaceSelector: SERVICE_NS_SELECTOR,
+      },
+      validations: [
+        {
+          expression: `!(has(request.userInfo.groups) && request.userInfo.groups.exists(g, g.startsWith(${cel(DEPLOY_GROUP_PREFIX)})))`,
+          messageExpression:
+            "'ConfigMap ' + request.name + ' is a trust anchor kept by a platform controller; " +
+            `the ${DEPLOY_GROUP_PREFIX}* groups may not create, update or delete it'`,
+          reason: 'Forbidden',
+        },
+      ],
+    },
+  );
+  return [...podSecurity, ...serviceType, ...trustAnchors];
 }
 
 // ----------------------------------------------------- workload references
@@ -1419,6 +1615,7 @@ export function render(contract = loadContract()) {
     'network-policies.yaml': networkPolicies(contract),
     'externalsecret-admission.yaml': externalSecretAdmission(contract),
     'deploy-rbac.yaml': deployRbac(contract),
+    'workload-admission.yaml': workloadAdmission(),
   };
 }
 

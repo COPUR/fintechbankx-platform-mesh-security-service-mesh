@@ -3,7 +3,7 @@
 // entry without an access policy. generated/deploy-rbac.yaml binds that group,
 // in its own namespace only, to a Role with the Helm release verbs on the kinds
 // the service charts render (tests/fixtures/deploy-chart-resources.json) and
-// read-only access for helm --wait, hooks and diagnosis. No Secrets: the
+// read-only access for diagnosing a failed rollout. No Secrets: the
 // cicd-templates helm-deploy.yml keeps releases in ConfigMaps
 // (HELM_DRIVER=configmap).
 import { test } from 'node:test';
@@ -36,8 +36,8 @@ function verbs(ns, apiGroup, resource) {
 
 const READ = ['get', 'list', 'watch'];
 const RELEASE = ['create', 'get', 'update', 'patch', 'delete'];
-// Read-only, not rendered by any chart: helm --wait reads the new ReplicaSet and
-// its pods, hooks are watched, and events explain a failed rollout.
+// Read-only, not rendered by any chart: helm --wait lists ReplicaSets; pods and
+// events explain a failed rollout or hook (helm reads neither).
 const READ_ONLY = [
   { apiGroup: '', resource: 'pods' },
   { apiGroup: 'apps', resource: 'replicasets' },
@@ -115,4 +115,20 @@ test('the Role grants nothing beyond the chart kinds and the read-only set; opt-
 test('the base kustomization lists generated/deploy-rbac.yaml', () => {
   const k = YAML.parse(readFileSync(join(repoRoot, 'deploy/kustomize/base/kustomization.yaml'), 'utf8'));
   assert.ok(k.resources.includes('generated/deploy-rbac.yaml'));
+});
+
+test('a surveyed chart that reads a Secret with lookup is named in the fixture and in the doc as not deployable', () => {
+  // Helm 3.16 lookup returns empty only on NotFound; the Forbidden answer to a
+  // Role without Secrets aborts the render on every upgrade --install.
+  const lookups = fixture.secretLookups;
+  assert.ok(lookups && typeof lookups === 'object', 'fixture.secretLookups');
+  const doc = readFileSync(join(repoRoot, 'docs/mesh/DEPLOYABLE_MESH_BASELINE.md'), 'utf8');
+  const section = doc.slice(doc.indexOf('## Deploy RBAC (Proposed)'), doc.indexOf('### Workload admission'));
+  for (const [chart, where] of Object.entries(lookups)) {
+    assert.ok(Object.keys(fixture.charts).some((k) => k.includes(chart)), `${chart} is a surveyed chart`);
+    assert.match(where, /lookup "v1" "Secret"/, chart);
+    const release = chart.split('/').pop().split(' ')[0];
+    assert.match(section, new RegExp(`\\(${release}\\)[^]*does not\\s+deploy with this Role`), `doc names ${release} as not deployable`);
+  }
+  for (const ns of serviceNs) assert.equal(verbs(ns, '', 'secrets').size, 0, `${ns}: the fix is the chart, not a Secrets grant`);
 });

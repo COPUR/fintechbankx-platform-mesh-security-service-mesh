@@ -8,15 +8,11 @@
 // Go the tests are skipped (reported as skipped, never as passed).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
-import { repoRoot, loadContract } from '../scripts/lib/contract.mjs';
+import { loadContract } from '../scripts/lib/contract.mjs';
 import { render } from '../scripts/generate/render-mesh-policies.mjs';
+import { evaluate, skip } from './cel/evaluate.mjs';
 
 const ENV = 'prod';
-const celDir = join(repoRoot, 'tests', 'cel');
-const goAvailable = spawnSync('go', ['version'], { encoding: 'utf8' }).status === 0;
-const skip = goAvailable ? false : 'go is not on PATH: the CEL of the admission policy was NOT evaluated';
 
 // The policy as an overlay renders it: mesh-params replaces ENVIRONMENT.
 function policySpec() {
@@ -34,7 +30,7 @@ const nsObject = (name, kind) => ({
 });
 const SERVICE_NS = { payments: 'service', lending: 'service', corebanking: 'service', observability: 'platform', sandbox: 'service' };
 
-function admissionCase(name, ns, { label, store = 'aws-secrets-manager', storeKind = 'ClusterSecretStore', keys = [], dataFrom, data } = {}) {
+function admissionCase(name, ns, { label, store = 'aws-secrets-manager', storeKind = 'ClusterSecretStore', keys = [], dataFrom, data, target } = {}) {
   return {
     name,
     request: { namespace: ns, operation: 'CREATE', kind: { group: 'external-secrets.io', version: 'v1beta1', kind: 'ExternalSecret' } },
@@ -47,21 +43,10 @@ function admissionCase(name, ns, { label, store = 'aws-secrets-manager', storeKi
         secretStoreRef: { kind: storeKind, name: store },
         ...(keys.length || data ? { data: data || keys.map((key, i) => ({ secretKey: `k${i}`, remoteRef: { key } })) } : {}),
         ...(dataFrom ? { dataFrom } : {}),
+        ...(target ? { target } : {}),
       },
     },
   };
-}
-
-function evaluate(spec, cases) {
-  const run = spawnSync('go', ['run', '.'], {
-    cwd: celDir,
-    input: JSON.stringify({ policy: spec, cases }),
-    encoding: 'utf8',
-    env: { ...process.env, GOTOOLCHAIN: process.env.GOTOOLCHAIN || 'local', GOFLAGS: '-mod=readonly' },
-    timeout: 300_000,
-  });
-  assert.equal(run.status, 0, `cel harness failed: ${run.stderr}`);
-  return Object.fromEntries(JSON.parse(run.stdout).map((r) => [r.name, r]));
 }
 
 const BULK = 'payment-bulk-orchestration-service';
@@ -165,4 +150,44 @@ test('CEL: corebanking admits the ledger\'s own <env>/accounts-ledger-service/ k
   assert.match(msg('ledger-hook-account-label'), /must carry label app.kubernetes.io\/name/);
   assert.match(msg('ledger-neighbour'), /got prod\/payment-initiation-settlement-service\/db-app/);
   assert.match(msg('ledger-from-payments'), new RegExp(`got ${ENV}/${LEDGER}/db-app`));
+});
+
+// spec.target: ESO writes the Secret with its own rights, which the deploy group
+// does not have. In a service namespace the target is an Opaque Secret that the
+// ExternalSecret owns: no service-account-token type or annotation (the token
+// controller would mint a non-expiring token for that account), and no Merge,
+// Orphan or None creationPolicy (Merge writes into a Secret it does not own).
+const own = [`${ENV}/${BULK}/db-app`];
+const targetCases = [
+  admissionCase('target-chart', 'payments', { label: BULK, keys: own, target: { name: 'bulk-db', creationPolicy: 'Owner' } }),
+  admissionCase('target-absent', 'payments', { label: BULK, keys: own }),
+  admissionCase('target-opaque-template', 'payments', {
+    label: BULK, keys: own, target: { template: { type: 'Opaque', data: { url: '{{ .k0 }}' }, metadata: { labels: { a: 'b' } } } },
+  }),
+  admissionCase('target-sa-token', 'payments', {
+    label: BULK, keys: own,
+    target: { template: { type: 'kubernetes.io/service-account-token', metadata: { annotations: { 'kubernetes.io/service-account.name': BULK } } } },
+  }),
+  admissionCase('target-sa-annotation', 'payments', {
+    label: BULK, keys: own, target: { template: { metadata: { annotations: { 'kubernetes.io/service-account.name': BULK } } } },
+  }),
+  admissionCase('target-dockerconfig', 'payments', { label: BULK, keys: own, target: { template: { type: 'kubernetes.io/dockerconfigjson' } } }),
+  admissionCase('target-merge', 'payments', { label: BULK, keys: own, target: { name: 'payment-initiation-settlement-service-db', creationPolicy: 'Merge' } }),
+  admissionCase('target-orphan', 'payments', { label: BULK, keys: own, target: { creationPolicy: 'Orphan' } }),
+  admissionCase('target-shared-namespace', 'observability', {
+    keys: [`${ENV}/observability/remote-write`], target: { creationPolicy: 'Merge', template: { type: 'kubernetes.io/basic-auth' } },
+  }),
+];
+
+test('CEL: a service-namespace ExternalSecret targets an Opaque Secret it owns', { skip }, () => {
+  const r = evaluate(policySpec(), targetCases);
+  const allowed = Object.entries(r).filter(([, v]) => v.allowed).map(([k]) => k).sort();
+  assert.deepEqual(allowed, ['target-absent', 'target-chart', 'target-opaque-template', 'target-shared-namespace'], JSON.stringify(r, null, 1));
+  const msg = (name) => r[name].messages.join(' | ');
+  assert.match(msg('target-sa-token'), /spec.target.template.type must be absent or Opaque in service namespaces; got kubernetes.io\/service-account-token/);
+  assert.match(msg('target-sa-token'), /spec.target.template may not set the annotation kubernetes.io\/service-account.name/);
+  assert.equal(msg('target-sa-annotation'), 'spec.target.template may not set the annotation kubernetes.io/service-account.name');
+  assert.match(msg('target-dockerconfig'), /got kubernetes.io\/dockerconfigjson$/);
+  assert.equal(msg('target-merge'), 'spec.target.creationPolicy must be Owner (the default) in service namespaces; got Merge');
+  assert.match(msg('target-orphan'), /got Orphan$/);
 });
