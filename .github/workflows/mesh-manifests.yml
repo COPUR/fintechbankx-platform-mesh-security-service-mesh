@@ -49,6 +49,17 @@ jobs:
             echo "::error::no pinned sha256 for istioctl ${istio_version} (deploy/istio/ISTIO_VERSION); only 1.24.3 is pinned"
             exit 1
           fi
+          # helm has no pinned sha256 yet: until it has, only HELM_VERSION v3.16.3 is
+          # installed, and only on a GitHub-hosted runner (a fresh VM; this job has a
+          # read-only token and no secrets). On a self-hosted runner the step fails here.
+          if [ "$HELM_VERSION" != "v3.16.3" ]; then
+            echo "::error::helm ${HELM_VERSION} has no reviewed download; only v3.16.3 is installed until helm's sha256 is pinned"
+            exit 1
+          fi
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            echo "::error::helm has no pinned sha256 yet, so it is installed only on GitHub-hosted runners (RUNNER_ENVIRONMENT=${RUNNER_ENVIRONMENT:-unset})"
+            exit 1
+          fi
           case "$(uname -m)" in
             x86_64)
               arch=amd64
@@ -84,7 +95,9 @@ jobs:
           tar -xzf "$dl/istioctl.tar.gz" -C "$bin" istioctl
           # Pin helm: the runner's preinstalled helm uses a newer JSON-schema
           # validator that rejects the Istio 1.24 gateway chart's own schema.
-          # sha256 not pinned yet: get the value from https://get.helm.sh/helm-v3.16.3-linux-<arch>.tar.gz.sha256sum
+          # sha256 not pinned yet (see the HELM_VERSION and runner checks above): take it from
+          # https://get.helm.sh/helm-v3.16.3-linux-<arch>.tar.gz once that tarball is verified
+          # against its .asc signature on the GitHub release with helm's KEYS.
           curl -sSfL -o "$dl/helm.tar.gz" "https://get.helm.sh/helm-${HELM_VERSION}-linux-${arch}.tar.gz"
           tar -xzf "$dl/helm.tar.gz" -C "$bin" --strip-components=1 "linux-${arch}/helm"
           echo "$bin" >> "$GITHUB_PATH"

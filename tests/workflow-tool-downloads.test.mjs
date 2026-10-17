@@ -616,7 +616,8 @@ test("mesh-manifests.yml 'Install validation tools' fetches each tool for the ru
   const job = wf.jobs["render-and-validate"];
   const step = job.steps.find((s) => s.name === "Install validation tools");
   assert.ok(step, "step 'Install validation tools' missing");
-  const env = { ...wf.env, ...job.env, ...step.env };
+  // GitHub sets RUNNER_ENVIRONMENT to github-hosted or self-hosted.
+  const env = { ...wf.env, ...job.env, ...step.env, RUNNER_ENVIRONMENT: "github-hosted" };
   const istioFile = "deploy/istio/ISTIO_VERSION";
   const pinned = { [istioFile]: fs.readFileSync(path.join(repoRoot, istioFile), "utf8") };
   for (const arch of ["x86_64", "aarch64"]) {
@@ -655,6 +656,10 @@ test("mesh-manifests.yml 'Install validation tools' fetches each tool for the ru
     [{ ...env, KUSTOMIZE_VERSION: "v9.9.9" }, pinned, /::error::.*kustomize v9\.9\.9/],
     [{ ...env, KUBECONFORM_VERSION: "v9.9.9" }, pinned, /::error::.*kubeconform v9\.9\.9/],
     [env, { [istioFile]: "1.25.0\n" }, /::error::.*istioctl 1\.25\.0/],
+    // helm, unpinned: another HELM_VERSION, or a runner that is not GitHub-hosted.
+    [{ ...env, HELM_VERSION: "v3.17.0" }, pinned, /::error::helm v3\.17\.0 /],
+    [{ ...env, RUNNER_ENVIRONMENT: "self-hosted" }, pinned, /::error::helm .*RUNNER_ENVIRONMENT=self-hosted/],
+    [Object.fromEntries(Object.entries(env).filter(([k]) => k !== "RUNNER_ENVIRONMENT")), pinned, /::error::helm .*RUNNER_ENVIRONMENT=unset/],
   ];
   for (const [e, files, message] of unpinned) {
     const other = stubs("x86_64");
