@@ -401,6 +401,13 @@ off, `OUTBOX_RELAY_ENABLED: "false"`; MSK egress is granted for when it is on).
 | Migration Job | `accounts-ledger-service-db-migration` (hook ServiceAccount, sidecar-less): DNS and the ledger's Aurora only (see "Database migration Jobs") |
 | Secrets | ExternalSecret admission scope `corebanking: [accounts-ledger-service]`: keys `<env>/accounts-ledger-service/db-app` and `<env>/accounts-ledger-service/db-migration` |
 
+- The gateway edges admit the web, mobile and staff clients, but the ledger's
+  `RequestAuthentication` also requires `aud` `svc-acc-accounts-ledger`, and
+  identity #11 adds that audience to the four callers' service clients only.
+  Until the channel clients (`fintechbankx-web`, `fintechbankx-mobile`,
+  `fintechbankx-staff-web`) get an audience mapper for it, the gateway paths
+  answer 401: closed, not open. Which channel clients get it is the owner's
+  decision.
 - `POST /api/v1/journal-entries` moves money (`ADMIN` or a `SERVICE_CALLERS`
   token) and stays off the public gateway, like the customer credit
   reserve/release operations. If staff need to post manual entries from the

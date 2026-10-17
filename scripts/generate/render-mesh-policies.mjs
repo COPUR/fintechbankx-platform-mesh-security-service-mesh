@@ -1274,8 +1274,8 @@ export function checkGuardCheckJobs(contract) {
 
 // ------------------------------------------ namespace default ServiceAccount
 // A pod spec that names no ServiceAccount runs as the namespace's `default`
-// one (consent's migrate Job; the lending and payments migration Jobs run as
-// hook ServiceAccounts of their own), and so does every other such pod of the
+// one (consent's migrate Job; the lending, payments and accounts ledger
+// migration Jobs run as hook ServiceAccounts of their own), and so does every other such pod of the
 // namespace. It is never an identity: only a sidecar-less Job (no sidecar, so
 // no principal) with a workload name of its own (not `default`, and used by no
 // other workload of the namespace: checkWorkloadReferences) may declare it,

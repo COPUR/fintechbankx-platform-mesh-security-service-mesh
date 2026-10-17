@@ -36,8 +36,8 @@ export const MIGRATION_COMPONENT = 'db-migration';
  * A Flyway migration Job (`role: db-migration`): no Service, no inbound, no
  * call edges (not part of the wildcards), no RequestAuthentication and no
  * secret slug of its own. It runs as a ServiceAccount of its own (customer,
- * risk, compliance; loan and the four payments services as a Helm-hook
- * ServiceAccount named like the Job) or as the namespace default
+ * risk, compliance; loan, the four payments services and the accounts ledger
+ * as a Helm-hook ServiceAccount named like the Job) or as the namespace default
  * ServiceAccount (`serviceAccount: default` with a `name` of its own:
  * open-finance consent). It reaches only DNS and the datastores it declares
  * (Aurora only); with a sidecar (`sidecar` absent) also istiod, without one
@@ -86,8 +86,9 @@ export function serviceWorkloads(contract) {
 
 /**
  * The namespace's `default` ServiceAccount: what a pod runs as when its spec
- * names none (today consent's migrate Job in open-finance only; the lending
- * and payments migration Jobs run as hook ServiceAccounts of their own).
+ * names none (today consent's migrate Job in open-finance only; the lending,
+ * payments and accounts ledger migration Jobs run as hook ServiceAccounts of
+ * their own).
  * Every such pod of the namespace shares it, so it is never an identity: only
  * a sidecar-less Job (no principal) with a workload `name` of its own may
  * declare it (checkNamespaceDefaultServiceAccount; no other workload of the
