@@ -443,7 +443,7 @@ metadata:
   name: allow-from-compliance-compliance-evidence-service-to-customer-profile-kyc-service
   namespace: customer
   annotations:
-    fintechbankx.io/evidence: screening-facts plan 2026-10-18, compliance reads GET /api/v1/customers/{id} (name, KYC status) for screening; customer
+    fintechbankx.io/evidence: screening-facts plan 2026-10-18, compliance reads GET /api/v1/customers/{id} (name, KYC status) for screening; the customer change of 2026-10-18 (customer PR 13) puts svc-cmp-evidence on SERVICE_CALLERS_PROFILE and SERVICE_CALLERS_KYC, so it also reads GET /api/v1/customers/{id}/kyc-status
 spec:
   selector:
     matchLabels:
