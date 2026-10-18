@@ -29,7 +29,7 @@ in the `banking` namespace, which would conflict with Istio's own injector).
 | `lending/loan-lifecycle-service` | `risk/risk-decisioning-service` | Screening-facts plan 2026-10-18: risk decides loan eligibility, loan enforces it | ALLOW by principal on 8080: `POST /api/v1/risk/loan-eligibility` only; the gateway excludes it like `/api/v1/risk/assess` |
 | every service | `identity/keycloak` | `OIDC_JWK_SET_URI`; client-credentials per platform contract | ALLOW JWKS GET, discovery GET, token POST |
 | every service | `observability/otel-collector` | platform contract (OTLP 4317/4318) | ALLOW ports 4317/4318 |
-| `payments/payment-initiation-settlement-service` | `open-finance/consent-authorization-service`, `open-finance/payee-verification-service` | Confirmed by the service threads (2026-10-08); no adapter on the payment branch yet | ALLOW by principal on 8080, port-only |
+| `payments/payment-initiation-settlement-service` | `open-finance/payee-verification-service` | Confirmed by the service threads (2026-10-08); no adapter on the payment branch yet. It does not call consent-auth, so it has no consent edge | ALLOW by principal on 8080, port-only |
 | ingress gateway | `corebanking/accounts-ledger-service` (`/api/v1/accounts`, `/api/v1/journal-entries`) | Ledger PR #1 2db7a04, `AccountController` and `JournalEntryController` `@PreAuthorize` | ALLOW by gateway principal per (method, path), JWT required: `GET /api/v1/accounts/{*}` for the web, mobile and staff clients; account open, freeze, unfreeze, close and `GET /api/v1/journal-entries/{*}` for the staff client only; never `POST /api/v1/journal-entries` |
 | `payments/payment-initiation-settlement-service`, `payments/payment-recurring-mandates-service` | `corebanking/accounts-ledger-service` | `CoreBankingAccountHttpAdapter` (initiation e3122fc), `AccountsServiceHttpAdapter` (mandates f8bc1b0): `GET /api/v1/accounts/{accountId}`; ledger `SERVICE_CALLERS` | ALLOW by principal on 8080: `GET /api/v1/accounts/{*}` and `POST /api/v1/journal-entries` |
 | `payments/payment-bulk-orchestration-service`, `lending/loan-lifecycle-service` | `corebanking/accounts-ledger-service` | Ledger `SERVICE_CALLERS` (no caller adapter yet) | ALLOW by principal on 8080: `POST /api/v1/journal-entries` only |
@@ -43,7 +43,7 @@ in the `banking` namespace, which would conflict with Istio's own injector).
 | Caller | Wants | Why it is a gap |
 |---|---|---|
 | `payments` request-to-pay, recurring-mandates, bulk-orchestration | ingress routes, datastores, call edges | Only the SAs are confirmed; they get identity, telemetry and scraping edges. Their controllers also expose `/open-finance/v1/{accounts,consents,loans}`, which overlap open-finance routes. |
-| `payments` | consent / payee-verification paths | Edge confirmed but no adapter yet; the rule is port-only until methods and paths are known, then it should be narrowed like loan -> customer (as risk and compliance now are). |
+| `payments` initiation-settlement | payee-verification paths | Edge confirmed but no adapter yet; the rule is port-only until methods and paths are known, then it should be narrowed like loan -> customer (as risk and compliance now are). |
 | `risk`, `compliance` | Kafka | Neither service configures Kafka yet; no MSK egress is granted. |
 
 Open-finance services validate their own DPoP/FAPI tokens (issuer is service

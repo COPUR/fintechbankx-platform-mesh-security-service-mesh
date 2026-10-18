@@ -124,6 +124,10 @@ test('loan calls risk loan eligibility only; payments calls assess and screen (v
     assert.deepEqual(e.methods, ['POST']);
   }
   assert.ok(!contract.gaps.some((g) => /\brisk\b|\bcompliance\b/.test(g.to)), 'risk and compliance are no gap of payments any more');
+  // Initiation-settlement has no consent edge at all, so its remaining gap is payee verification only.
+  assert.ok(!contract.edges.some((x) => x.from === 'payments/payment-initiation-settlement-service' && x.to.startsWith('open-finance/consent-')));
+  const gap = contract.gaps.filter((g) => g.from === 'payments/payment-initiation-settlement-service').map((g) => g.to);
+  assert.deepEqual(gap, ['open-finance payee verification (paths)']);
 });
 
 test('gateway: loan eligibility, assess and screen stay off the edge; no v2 route', () => {
