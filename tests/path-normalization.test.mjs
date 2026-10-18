@@ -1,8 +1,9 @@
 // Path normalization and the gateway's notPaths exclusions.
 //
 // The gateway ALLOW rules exclude service-only operations with notPaths
-// (customer credit reserve/release, risk assess, compliance screen). An
-// exclusion is only as good as the path Envoy compares it with:
+// (customer credit reserve/release, risk assess and loan eligibility,
+// compliance screen). An exclusion is only as good as the path Envoy
+// compares it with:
 //  - "//" variants (/api/v1/risk//assess) are collapsed by
 //    meshConfig.pathNormalization MERGE_SLASHES before routing and before the
 //    RBAC filter evaluates AuthorizationPolicy, so they hit the exclusion.
@@ -47,8 +48,8 @@ test('every gateway notPath also excludes its trailing-slash and sub-path varian
   }
 });
 
-test('risk assess and compliance screen stay excluded in every slash variant', () => {
+test('risk assess, risk loan eligibility and compliance screen stay excluded in every slash variant', () => {
   const ops = Object.fromEntries(gatewayRules().map((r) => [r.policy.split('/')[0], r.op]));
-  assert.deepEqual(ops.risk.notPaths, ['/api/v1/risk/assess', '/api/v1/risk/assess/*']);
+  assert.deepEqual(ops.risk.notPaths, ['/api/v1/risk/assess', '/api/v1/risk/assess/*', '/api/v1/risk/loan-eligibility', '/api/v1/risk/loan-eligibility/*']);
   assert.deepEqual(ops.compliance.notPaths, ['/api/v1/compliance/screen', '/api/v1/compliance/screen/*']);
 });

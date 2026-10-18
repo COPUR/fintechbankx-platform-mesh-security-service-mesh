@@ -891,7 +891,9 @@ edges:
     to: risk/risk-decisioning-service
     port: 8080
     paths: [/api/v1/risk, /api/v1/risk/*]
-    notPaths: [/api/v1/risk/assess]   # called by payments only (service-only, review finding)
+    # assess: called by payments only (service-only, review finding);
+    # loan-eligibility: called by loan only (screening facts, CRC plan 2026-10-18).
+    notPaths: [/api/v1/risk/assess, /api/v1/risk/loan-eligibility]
     evidence: risk controller @RequestMapping("/api/v1/risk")
   - from: istio-ingress/istio-ingressgateway
     to: compliance/compliance-evidence-service
@@ -1018,19 +1020,49 @@ edges:
     paths: [/api/v1/journal-entries]
     evidence: ledger 2db7a04 JournalEntryController POST /api/v1/journal-entries, SERVICE_CALLERS svc-ln-loan-lifecycle; no caller adapter yet
 
-  # payments -> risk / compliance: confirmed by the service threads
-  # (coordinator, 2026-10-08). No HTTP adapter exists on the payment branch yet,
-  # so methods and paths are unknown and the rule is port-scoped only.
+  # payments -> risk / compliance: the payment adapters call v1 today; the
+  # screening-facts plan (CRC, 2026-10-18) adds v2 operations whose bodies carry
+  # ids and amounts only, and payments moves to them. v1 stays allowed until
+  # payments is on v2 (cutover precondition "v1 flag off, callers on v2"); drop
+  # it from these edges then.
   - from: payments/payment-initiation-settlement-service
     to: risk/risk-decisioning-service
     port: 8080
-    scope: port-only
-    evidence: confirmed by service thread 2026-10-08; adapter not yet on claude/project-thread-ty79y4
+    methods: [POST]
+    paths: [/api/v1/risk/assess, /api/v2/risk/assess]
+    evidence: initiation a0e08be RiskDecisioningHttpAdapter POST /api/v1/risk/assess; screening-facts plan 2026-10-18 POST /api/v2/risk/assess
   - from: payments/payment-initiation-settlement-service
     to: compliance/compliance-evidence-service
     port: 8080
-    scope: port-only
-    evidence: confirmed by service thread 2026-10-08; adapter not yet on claude/project-thread-ty79y4
+    methods: [POST]
+    paths: [/api/v1/compliance/screen, /api/v2/compliance/screen]
+    evidence: initiation a0e08be ComplianceEvidenceHttpAdapter POST /api/v1/compliance/screen; screening-facts plan 2026-10-18 POST /api/v2/compliance/screen
+
+  # Screening facts computed by their owners (CRC plan 2026-10-18, owner's
+  # answers to the 10-08 cards): risk reads the credit profile for loan
+  # eligibility, compliance reads the customer's name and KYC status for
+  # sanctions and PEP screening, and loan asks risk for eligibility. Client
+  # credentials tokens: svc-rsk-decisioning and svc-cmp-evidence with aud
+  # svc-cus-profile-kyc, svc-ln-loan-lifecycle with aud svc-rsk-decisioning
+  # (identity service-clients.json); each callee checks azp itself.
+  - from: risk/risk-decisioning-service
+    to: customer/customer-profile-kyc-service
+    port: 8080
+    methods: [GET]
+    paths: ["/api/v1/customers/{*}/credit"]
+    evidence: screening-facts plan 2026-10-18, risk reads GET /api/v1/customers/{id}/credit for loan eligibility
+  - from: compliance/compliance-evidence-service
+    to: customer/customer-profile-kyc-service
+    port: 8080
+    methods: [GET]
+    paths: ["/api/v1/customers/{*}"]
+    evidence: screening-facts plan 2026-10-18, compliance reads GET /api/v1/customers/{id} (name, KYC status) for screening
+  - from: lending/loan-lifecycle-service
+    to: risk/risk-decisioning-service
+    port: 8080
+    methods: [POST]
+    paths: [/api/v1/risk/loan-eligibility]
+    evidence: screening-facts plan 2026-10-18, loan enforces risk's POST /api/v1/risk/loan-eligibility decision
 
   # North-south: ingress gateway -> open-finance APIs (service-side DPoP/FAPI).
   - from: istio-ingress/istio-ingressgateway
@@ -1442,7 +1474,9 @@ externalDependencies:
 # corebanking edges above.)
 gaps:
   - from: payments/payment-initiation-settlement-service
-    to: risk, compliance, open-finance consent and payee verification (paths)
+    to: open-finance consent and payee verification (paths)
     evidence: >-
       Edges confirmed by the service threads but no adapter exists yet; the
       ALLOW rules are port-only (8080) until methods and paths are known.
+      (risk and compliance were too until the payment adapters and the
+      screening-facts plan named their operations.)

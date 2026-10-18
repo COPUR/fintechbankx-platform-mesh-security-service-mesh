@@ -357,6 +357,34 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: allow-egress-loan-lifecycle-service-to-risk
+  namespace: lending
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loan-lifecycle-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: risk
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: risk-decisioning-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: default-deny-all
   namespace: payments
 spec:
@@ -1275,6 +1303,32 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: allow-ingress-from-compliance
+  namespace: customer
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: compliance
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: compliance-evidence-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: allow-ingress-from-istio-ingress
   namespace: customer
 spec:
@@ -1372,6 +1426,32 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: payment-initiation-settlement-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-risk
+  namespace: customer
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: risk
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: risk-decisioning-service
       ports:
         - protocol: TCP
           port: 8080
@@ -1650,6 +1730,32 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: allow-ingress-from-lending
+  namespace: risk
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: lending
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loan-lifecycle-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: allow-ingress-from-observability
   namespace: risk
 spec:
@@ -1695,6 +1801,34 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: payment-initiation-settlement-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-risk-decisioning-service-to-customer
+  namespace: risk
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: risk-decisioning-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: customer
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: customer-profile-kyc-service
       ports:
         - protocol: TCP
           port: 8080
@@ -2018,6 +2152,34 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: payment-initiation-settlement-service
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-compliance-evidence-service-to-customer
+  namespace: compliance
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: compliance-evidence-service
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - db-migration
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: customer
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: customer-profile-kyc-service
       ports:
         - protocol: TCP
           port: 8080

@@ -28,6 +28,7 @@ spec:
         - identity/*
         - istio-system/*
         - observability/*
+        - risk/*
   outboundTrafficPolicy:
     mode: REGISTRY_ONLY
 ---
@@ -75,6 +76,7 @@ spec:
   egress:
     - hosts:
         - ./*
+        - customer/*
         - identity/*
         - istio-system/*
         - observability/*
@@ -90,6 +92,7 @@ spec:
   egress:
     - hosts:
         - ./*
+        - customer/*
         - identity/*
         - istio-system/*
         - observability/*

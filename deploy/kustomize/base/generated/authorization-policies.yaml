@@ -193,7 +193,7 @@ metadata:
   name: allow-from-payments-payment-initiation-settlement-service-to-compliance-evidence-service
   namespace: compliance
   annotations:
-    fintechbankx.io/evidence: confirmed by service thread 2026-10-08; adapter not yet on claude/project-thread-ty79y4
+    fintechbankx.io/evidence: initiation a0e08be ComplianceEvidenceHttpAdapter POST /api/v1/compliance/screen; screening-facts plan 2026-10-18 POST /api/v2/compliance/screen
 spec:
   selector:
     matchLabels:
@@ -208,6 +208,11 @@ spec:
         - operation:
             ports:
               - "8080"
+            methods:
+              - POST
+            paths:
+              - /api/v1/compliance/screen
+              - /api/v2/compliance/screen
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -435,6 +440,32 @@ spec:
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
+  name: allow-from-compliance-compliance-evidence-service-to-customer-profile-kyc-service
+  namespace: customer
+  annotations:
+    fintechbankx.io/evidence: screening-facts plan 2026-10-18, compliance reads GET /api/v1/customers/{id} (name, KYC status) for screening
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: customer-profile-kyc-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/compliance/sa/compliance-evidence-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /api/v1/customers/{*}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
   name: allow-from-istio-ingress-istio-ingressgateway-to-customer-profile-kyc-service
   namespace: customer
   annotations:
@@ -577,6 +608,32 @@ spec:
               - GET
             paths:
               - /api/v1/customers/{*}/kyc-status
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-risk-risk-decisioning-service-to-customer-profile-kyc-service
+  namespace: customer
+  annotations:
+    fintechbankx.io/evidence: screening-facts plan 2026-10-18, risk reads GET /api/v1/customers/{id}/credit for loan eligibility
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: customer-profile-kyc-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/risk/sa/risk-decisioning-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+            paths:
+              - /api/v1/customers/{*}/credit
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -3668,6 +3725,34 @@ spec:
             notPaths:
               - /api/v1/risk/assess
               - /api/v1/risk/assess/*
+              - /api/v1/risk/loan-eligibility
+              - /api/v1/risk/loan-eligibility/*
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-from-lending-loan-lifecycle-service-to-risk-decisioning-service
+  namespace: risk
+  annotations:
+    fintechbankx.io/evidence: screening-facts plan 2026-10-18, loan enforces risk's POST /api/v1/risk/loan-eligibility decision
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: risk-decisioning-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/lending/sa/loan-lifecycle-service
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - POST
+            paths:
+              - /api/v1/risk/loan-eligibility
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -3703,7 +3788,7 @@ metadata:
   name: allow-from-payments-payment-initiation-settlement-service-to-risk-decisioning-service
   namespace: risk
   annotations:
-    fintechbankx.io/evidence: confirmed by service thread 2026-10-08; adapter not yet on claude/project-thread-ty79y4
+    fintechbankx.io/evidence: initiation a0e08be RiskDecisioningHttpAdapter POST /api/v1/risk/assess; screening-facts plan 2026-10-18 POST /api/v2/risk/assess
 spec:
   selector:
     matchLabels:
@@ -3718,6 +3803,11 @@ spec:
         - operation:
             ports:
               - "8080"
+            methods:
+              - POST
+            paths:
+              - /api/v1/risk/assess
+              - /api/v2/risk/assess
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy

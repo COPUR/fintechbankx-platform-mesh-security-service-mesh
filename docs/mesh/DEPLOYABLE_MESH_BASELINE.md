@@ -24,7 +24,9 @@ in the `banking` namespace, which would conflict with Istio's own injector).
 | ingress gateway | 7 open-finance APIs (`/open-finance/v1/{consents,confirmation-of-payee,accounts,corporate,metadata,atms,products}`) | Controllers on branch `claude/project-thread-nfwa8t`; confirmed by service threads | ALLOW by gateway principal, path-scoped; tokens checked by the services (DPoP/FAPI) |
 | ingress gateway | 5 service APIs (customer also serves the staff/customer UI) (`/api/v1/{loans,payments,customers,risk,compliance}`) | `@RequestMapping` in each controller | ALLOW by gateway principal, JWT required |
 | `lending/loan-lifecycle-service` | `customer/customer-profile-kyc-service` | `CUSTOMER_SERVICE_BASE_URL`, `CustomerProfileHttpAdapter` (GET customer, POST credit reserve/release); client-credentials token since loan commit a33b418 | ALLOW by principal on 8080, method- and path-scoped |
-| `payments/payment-initiation-settlement-service` | `risk/risk-decisioning-service`, `compliance/compliance-evidence-service` | Confirmed by the service threads (2026-10-08); no adapter on the payment branch yet | ALLOW by principal on 8080, port-only (paths unknown) |
+| `payments/payment-initiation-settlement-service` | `risk/risk-decisioning-service`, `compliance/compliance-evidence-service` | `RiskDecisioningHttpAdapter` and `ComplianceEvidenceHttpAdapter` (initiation a0e08be, v1); screening-facts plan 2026-10-18 (v2, ids and amounts only) | ALLOW by principal on 8080: `POST /api/v1/risk/assess` and `/api/v2/risk/assess`, `POST /api/v1/compliance/screen` and `/api/v2/compliance/screen`; v1 goes once payments is on v2 |
+| `risk/risk-decisioning-service`, `compliance/compliance-evidence-service` | `customer/customer-profile-kyc-service` | Screening-facts plan 2026-10-18: risk reads the credit profile for loan eligibility, compliance the name and KYC status for screening | ALLOW by principal on 8080: risk `GET /api/v1/customers/{*}/credit`, compliance `GET /api/v1/customers/{*}` |
+| `lending/loan-lifecycle-service` | `risk/risk-decisioning-service` | Screening-facts plan 2026-10-18: risk decides loan eligibility, loan enforces it | ALLOW by principal on 8080: `POST /api/v1/risk/loan-eligibility` only; the gateway excludes it like `/api/v1/risk/assess` |
 | every service | `identity/keycloak` | `OIDC_JWK_SET_URI`; client-credentials per platform contract | ALLOW JWKS GET, discovery GET, token POST |
 | every service | `observability/otel-collector` | platform contract (OTLP 4317/4318) | ALLOW ports 4317/4318 |
 | `payments/payment-initiation-settlement-service` | `open-finance/consent-authorization-service`, `open-finance/payee-verification-service` | Confirmed by the service threads (2026-10-08); no adapter on the payment branch yet | ALLOW by principal on 8080, port-only |
@@ -41,7 +43,7 @@ in the `banking` namespace, which would conflict with Istio's own injector).
 | Caller | Wants | Why it is a gap |
 |---|---|---|
 | `payments` request-to-pay, recurring-mandates, bulk-orchestration | ingress routes, datastores, call edges | Only the SAs are confirmed; they get identity, telemetry and scraping edges. Their controllers also expose `/open-finance/v1/{accounts,consents,loans}`, which overlap open-finance routes. |
-| `payments` | risk / compliance / consent / payee-verification paths | Edge confirmed but no adapter yet; the rule is port-only until methods and paths are known, then it should be narrowed like loan -> customer. |
+| `payments` | consent / payee-verification paths | Edge confirmed but no adapter yet; the rule is port-only until methods and paths are known, then it should be narrowed like loan -> customer (as risk and compliance now are). |
 | `risk`, `compliance` | Kafka | Neither service configures Kafka yet; no MSK egress is granted. |
 
 Open-finance services validate their own DPoP/FAPI tokens (issuer is service

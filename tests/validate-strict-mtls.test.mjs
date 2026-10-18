@@ -150,8 +150,10 @@ test('contract: east-west service edges are exactly the confirmed ones and scope
   const svcNs = new Set(['lending', 'payments', 'customer', 'risk', 'compliance', 'open-finance', 'corebanking']);
   const eastWest = expandEdges(contract).filter((e) => svcNs.has(e.from.ns) && svcNs.has(e.to.ns));
   assert.deepEqual([...new Set(eastWest.map((e) => `${e.from.ns}/${e.from.sa}->${e.to.ns}/${e.to.sa}`))].sort(), [
+    'compliance/compliance-evidence-service->customer/customer-profile-kyc-service',
     'lending/loan-lifecycle-service->corebanking/accounts-ledger-service',
     'lending/loan-lifecycle-service->customer/customer-profile-kyc-service',
+    'lending/loan-lifecycle-service->risk/risk-decisioning-service',
     'payments/payment-bulk-orchestration-service->corebanking/accounts-ledger-service',
     'payments/payment-bulk-orchestration-service->open-finance/consent-authorization-service',
     'payments/payment-initiation-settlement-service->compliance/compliance-evidence-service',
@@ -161,6 +163,7 @@ test('contract: east-west service edges are exactly the confirmed ones and scope
     'payments/payment-initiation-settlement-service->risk/risk-decisioning-service',
     'payments/payment-recurring-mandates-service->corebanking/accounts-ledger-service',
     'payments/payment-recurring-mandates-service->open-finance/consent-authorization-service',
+    'risk/risk-decisioning-service->customer/customer-profile-kyc-service',
   ]);
   for (const e of eastWest) {
     assert.ok(
@@ -288,7 +291,9 @@ test('gateway: service-only operations are not reachable from the ingress gatewa
   const customer = gwOps('customer', 'allow-from-istio-ingress-istio-ingressgateway-to-customer-profile-kyc-service');
   assert.deepEqual(customer[0].notPaths, ['/api/v1/customers/{*}/credit', '/api/v1/customers/{*}/credit/', '/api/v1/customers/{*}/credit/{**}']);
   assert.deepEqual(customer[1], { ports: ['8080'], methods: ['GET'], paths: ['/api/v1/customers/{*}/credit'] });
-  assert.deepEqual(gwOps('risk', 'allow-from-istio-ingress-istio-ingressgateway-to-risk-decisioning-service')[0].notPaths, ['/api/v1/risk/assess', '/api/v1/risk/assess/*']);
+  assert.deepEqual(gwOps('risk', 'allow-from-istio-ingress-istio-ingressgateway-to-risk-decisioning-service')[0].notPaths, [
+    '/api/v1/risk/assess', '/api/v1/risk/assess/*', '/api/v1/risk/loan-eligibility', '/api/v1/risk/loan-eligibility/*',
+  ]);
   assert.deepEqual(gwOps('compliance', 'allow-from-istio-ingress-istio-ingressgateway-to-compliance-evidence-service')[0].notPaths, ['/api/v1/compliance/screen', '/api/v1/compliance/screen/*']);
   const admin = gwOps('identity', 'allow-from-customer-customer-profile-kyc-service-to-keycloak');
   assert.ok(admin.some((o) => o.methods?.includes('PUT') && o.paths.includes('/admin/realms/fintechbankx/users/*')));
