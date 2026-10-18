@@ -4,7 +4,8 @@
 //  - risk-decisioning-service reads GET /api/v1/customers/{id}/credit (score
 //    and profile for loan eligibility);
 //  - compliance-evidence-service reads GET /api/v1/customers/{id} (name and
-//    KYC status for sanctions and PEP screening);
+//    KYC status for sanctions and PEP screening) and GET .../{id}/kyc-status
+//    (customer #13 puts it on SERVICE_CALLERS_PROFILE and SERVICE_CALLERS_KYC);
 //  - loan-lifecycle-service calls risk POST /api/v1/risk/loan-eligibility,
 //    which is service-only like POST /api/v1/risk/assess;
 //  - payment-initiation-settlement-service calls risk POST /api/v1/risk/assess
@@ -106,9 +107,10 @@ const COMPLIANCE_OPERATIONS = [
   ['GET', '/api/v2/compliance/screen'],
 ];
 
-test('risk reads a customer credit profile and compliance reads a customer, nothing else', () => {
+test('risk reads a customer credit profile; compliance reads a customer and its KYC status; nothing else', () => {
   assert.deepEqual(admitted('customer', RISK, CUSTOMER_OPERATIONS), [`GET ${CUSTOMER}/credit`]);
-  assert.deepEqual(admitted('customer', COMPLIANCE, CUSTOMER_OPERATIONS), [`GET ${CUSTOMER}`]);
+  // Compliance also reads the KYC status (customer #13: svc-cmp-evidence on SERVICE_CALLERS_PROFILE and SERVICE_CALLERS_KYC).
+  assert.deepEqual(admitted('customer', COMPLIANCE, CUSTOMER_OPERATIONS), [`GET ${CUSTOMER}`, `GET ${CUSTOMER}/kyc-status`]);
 });
 
 test('loan calls risk loan eligibility only; payments calls assess and screen (v1 and v2) only', () => {

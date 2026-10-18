@@ -1055,8 +1055,8 @@ edges:
     to: customer/customer-profile-kyc-service
     port: 8080
     methods: [GET]
-    paths: ["/api/v1/customers/{*}"]
-    evidence: screening-facts plan 2026-10-18, compliance reads GET /api/v1/customers/{id} (name, KYC status) for screening
+    paths: ["/api/v1/customers/{*}", "/api/v1/customers/{*}/kyc-status"]
+    evidence: screening-facts plan 2026-10-18, compliance reads GET /api/v1/customers/{id} (name, KYC status) for screening; customer #13 (2026-10-18) puts svc-cmp-evidence on SERVICE_CALLERS_PROFILE and SERVICE_CALLERS_KYC, so it also reads GET /api/v1/customers/{id}/kyc-status
   - from: lending/loan-lifecycle-service
     to: risk/risk-decisioning-service
     port: 8080

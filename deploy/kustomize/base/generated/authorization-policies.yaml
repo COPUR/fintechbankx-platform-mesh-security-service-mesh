@@ -443,7 +443,7 @@ metadata:
   name: allow-from-compliance-compliance-evidence-service-to-customer-profile-kyc-service
   namespace: customer
   annotations:
-    fintechbankx.io/evidence: screening-facts plan 2026-10-18, compliance reads GET /api/v1/customers/{id} (name, KYC status) for screening
+    fintechbankx.io/evidence: screening-facts plan 2026-10-18, compliance reads GET /api/v1/customers/{id} (name, KYC status) for screening; customer
 spec:
   selector:
     matchLabels:
@@ -462,6 +462,7 @@ spec:
               - GET
             paths:
               - /api/v1/customers/{*}
+              - /api/v1/customers/{*}/kyc-status
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
