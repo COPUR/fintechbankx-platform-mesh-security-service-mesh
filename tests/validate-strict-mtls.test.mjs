@@ -289,7 +289,17 @@ test('gateway: service-only operations are not reachable from the ingress gatewa
       .doc.spec.rules.map((r) => r.to[0].operation);
   // /credit and below is excluded; GET /credit comes back through a GET-only rule (tests/customer-edge.test.mjs).
   const customer = gwOps('customer', 'allow-from-istio-ingress-istio-ingressgateway-to-customer-profile-kyc-service');
-  assert.deepEqual(customer[0].notPaths, ['/api/v1/customers/{*}/credit', '/api/v1/customers/{*}/credit/', '/api/v1/customers/{*}/credit/{**}']);
+  assert.deepEqual(customer[0].notPaths, [
+    '/api/v1/customers/{*}/credit',
+    '/api/v1/customers/{*}/credit/',
+    '/api/v1/customers/{*}/credit/{**}',
+    '/api/v1/customers/{*}/credit-standing',
+    '/api/v1/customers/{*}/credit-standing/',
+    '/api/v1/customers/{*}/credit-standing/{**}',
+    '/api/v1/customers/{*}/screening-profile',
+    '/api/v1/customers/{*}/screening-profile/',
+    '/api/v1/customers/{*}/screening-profile/{**}',
+  ]);
   assert.deepEqual(customer[1], { ports: ['8080'], methods: ['GET'], paths: ['/api/v1/customers/{*}/credit'] });
   assert.deepEqual(gwOps('risk', 'allow-from-istio-ingress-istio-ingressgateway-to-risk-decisioning-service')[0].notPaths, [
     '/api/v1/risk/assess', '/api/v1/risk/assess/*', '/api/v1/risk/loan-eligibility', '/api/v1/risk/loan-eligibility/*',

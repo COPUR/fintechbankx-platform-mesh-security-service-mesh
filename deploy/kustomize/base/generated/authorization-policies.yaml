@@ -443,7 +443,7 @@ metadata:
   name: allow-from-compliance-compliance-evidence-service-to-customer-profile-kyc-service
   namespace: customer
   annotations:
-    fintechbankx.io/evidence: screening-facts plan 2026-10-18, compliance reads GET /api/v1/customers/{id} (name, KYC status) for screening; the customer change of 2026-10-18 (customer PR 13) puts svc-cmp-evidence on SERVICE_CALLERS_PROFILE and SERVICE_CALLERS_KYC, so it also reads GET /api/v1/customers/{id}/kyc-status
+    fintechbankx.io/evidence: screening-facts plan 2026-10-18, compliance reads GET /api/v1/customers/{id}/screening-profile (customer SERVICE_CALLERS_SCREENING, default svc-cmp-evidence) for screening
 spec:
   selector:
     matchLabels:
@@ -461,8 +461,7 @@ spec:
             methods:
               - GET
             paths:
-              - /api/v1/customers/{*}
-              - /api/v1/customers/{*}/kyc-status
+              - /api/v1/customers/{*}/screening-profile
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -492,6 +491,12 @@ spec:
               - /api/v1/customers/{*}/credit
               - /api/v1/customers/{*}/credit/
               - /api/v1/customers/{*}/credit/{**}
+              - /api/v1/customers/{*}/credit-standing
+              - /api/v1/customers/{*}/credit-standing/
+              - /api/v1/customers/{*}/credit-standing/{**}
+              - /api/v1/customers/{*}/screening-profile
+              - /api/v1/customers/{*}/screening-profile/
+              - /api/v1/customers/{*}/screening-profile/{**}
       when:
         - key: request.auth.claims[azp]
           values:
@@ -616,7 +621,7 @@ metadata:
   name: allow-from-risk-risk-decisioning-service-to-customer-profile-kyc-service
   namespace: customer
   annotations:
-    fintechbankx.io/evidence: screening-facts plan 2026-10-18, risk reads GET /api/v1/customers/{id}/credit for loan eligibility
+    fintechbankx.io/evidence: screening-facts plan 2026-10-18, risk reads GET /api/v1/customers/{id}/credit-standing (customer SERVICE_CALLERS_CREDIT_STANDING, default svc-rsk-decisioning) for loan eligibility
 spec:
   selector:
     matchLabels:
@@ -634,7 +639,7 @@ spec:
             methods:
               - GET
             paths:
-              - /api/v1/customers/{*}/credit
+              - /api/v1/customers/{*}/credit-standing
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy

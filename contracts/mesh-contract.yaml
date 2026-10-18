@@ -867,15 +867,17 @@ edges:
   # svc-cus-profile-kyc); the gateway forwards the token it validated.
   # Service-only credit operations stay off the public gateway (review
   # finding, customer thread 2026-10-08): only loan-lifecycle calls
-  # POST credit/reserve|release. GET /credit and GET /kyc-status stay public
-  # (CUSTOMER self-read, BANKER, ADMIN; customer thread 2026-10-08), so
-  # /credit and everything below it is excluded here and GET /credit is
-  # allowed by the next edge alone.
+  # POST credit/reserve|release, and only risk and compliance read
+  # /credit-standing and /screening-profile (screening-facts plan
+  # 2026-10-18). GET /credit and GET /kyc-status stay public (CUSTOMER
+  # self-read, BANKER, ADMIN; customer thread 2026-10-08), so /credit,
+  # /credit-standing, /screening-profile and everything below them are
+  # excluded here and GET /credit is allowed by the next edge alone.
   - from: istio-ingress/istio-ingressgateway
     to: customer/customer-profile-kyc-service
     port: 8080
     paths: [/api/v1/customers, /api/v1/customers/*]
-    notPaths: ["/api/v1/customers/{*}/credit"]
+    notPaths: ["/api/v1/customers/{*}/credit", "/api/v1/customers/{*}/credit-standing", "/api/v1/customers/{*}/screening-profile"]
     when: &first-party-azp
       - key: request.auth.claims[azp]
         values: [fintechbankx-web, fintechbankx-mobile, fintechbankx-staff-web]
@@ -1039,9 +1041,12 @@ edges:
     evidence: initiation a0e08be ComplianceEvidenceHttpAdapter POST /api/v1/compliance/screen; screening-facts plan 2026-10-18 POST /api/v2/compliance/screen
 
   # Screening facts computed by their owners (CRC plan 2026-10-18, owner's
-  # answers to the 10-08 cards): risk reads the credit profile for loan
-  # eligibility, compliance reads the customer's name and KYC status for
-  # sanctions and PEP screening, and loan asks risk for eligibility. Client
+  # answers to the 10-08 cards): risk reads a customer's credit standing for
+  # loan eligibility, compliance reads a customer's screening profile (name
+  # and KYC status) for sanctions and PEP screening, and loan asks risk for
+  # eligibility. Both customer reads are new, service-only endpoints; the
+  # customer change that adds them is not deployed yet and has to deploy
+  # before risk's loan eligibility or compliance's v2 screen is used. Client
   # credentials tokens: svc-rsk-decisioning and svc-cmp-evidence with aud
   # svc-cus-profile-kyc, svc-ln-loan-lifecycle with aud svc-rsk-decisioning
   # (identity service-clients.json); each callee checks azp itself.
@@ -1049,14 +1054,14 @@ edges:
     to: customer/customer-profile-kyc-service
     port: 8080
     methods: [GET]
-    paths: ["/api/v1/customers/{*}/credit"]
-    evidence: screening-facts plan 2026-10-18, risk reads GET /api/v1/customers/{id}/credit for loan eligibility
+    paths: ["/api/v1/customers/{*}/credit-standing"]
+    evidence: screening-facts plan 2026-10-18, risk reads GET /api/v1/customers/{id}/credit-standing (customer SERVICE_CALLERS_CREDIT_STANDING, default svc-rsk-decisioning) for loan eligibility
   - from: compliance/compliance-evidence-service
     to: customer/customer-profile-kyc-service
     port: 8080
     methods: [GET]
-    paths: ["/api/v1/customers/{*}", "/api/v1/customers/{*}/kyc-status"]
-    evidence: screening-facts plan 2026-10-18, compliance reads GET /api/v1/customers/{id} (name, KYC status) for screening; the customer change of 2026-10-18 (customer PR 13) puts svc-cmp-evidence on SERVICE_CALLERS_PROFILE and SERVICE_CALLERS_KYC, so it also reads GET /api/v1/customers/{id}/kyc-status
+    paths: ["/api/v1/customers/{*}/screening-profile"]
+    evidence: screening-facts plan 2026-10-18, compliance reads GET /api/v1/customers/{id}/screening-profile (customer SERVICE_CALLERS_SCREENING, default svc-cmp-evidence) for screening
   - from: lending/loan-lifecycle-service
     to: risk/risk-decisioning-service
     port: 8080

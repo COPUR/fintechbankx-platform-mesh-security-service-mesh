@@ -1,11 +1,14 @@
 // Screening facts computed by their owners (CRC plan 2026-10-18, owner's
 // answers to the 10-08 cards): payments sends only ids and amounts, and the
 // owners read what they need from the customer service.
-//  - risk-decisioning-service reads GET /api/v1/customers/{id}/credit (score
-//    and profile for loan eligibility);
-//  - compliance-evidence-service reads GET /api/v1/customers/{id} (name and
-//    KYC status for sanctions and PEP screening) and GET .../{id}/kyc-status
-//    (customer #13 puts it on SERVICE_CALLERS_PROFILE and SERVICE_CALLERS_KYC);
+//  - risk-decisioning-service reads GET /api/v1/customers/{id}/credit-standing
+//    (score and credit position for loan eligibility; customer's
+//    SERVICE_CALLERS_CREDIT_STANDING, default svc-rsk-decisioning);
+//  - compliance-evidence-service reads GET /api/v1/customers/{id}/screening-profile
+//    (customerId, firstName, lastName, kycStatus for sanctions and PEP
+//    screening; customer's SERVICE_CALLERS_SCREENING, default svc-cmp-evidence);
+//  - neither reads the customer record, /credit or /kyc-status, and both new
+//    reads are service-only, so the gateway does not route them;
 //  - loan-lifecycle-service calls risk POST /api/v1/risk/loan-eligibility,
 //    which is service-only like POST /api/v1/risk/assess;
 //  - payment-initiation-settlement-service calls risk POST /api/v1/risk/assess
@@ -80,6 +83,8 @@ const CUSTOMER = '/api/v1/customers/CUST-7d1f';
 const CUSTOMER_OPERATIONS = [
   ['GET', CUSTOMER],
   ['GET', `${CUSTOMER}/credit`],
+  ['GET', `${CUSTOMER}/credit-standing`],
+  ['GET', `${CUSTOMER}/screening-profile`],
   ['GET', `${CUSTOMER}/kyc-status`],
   ['POST', `${CUSTOMER}/credit/reserve`],
   ['POST', `${CUSTOMER}/credit/release`],
@@ -88,6 +93,10 @@ const CUSTOMER_OPERATIONS = [
   ['GET', '/api/v1/customers'],
   ['GET', `${CUSTOMER}/`],
   ['GET', `${CUSTOMER}/credit/`],
+  ['GET', `${CUSTOMER}/credit-standing/`],
+  ['GET', `${CUSTOMER}/screening-profile/`],
+  ['POST', `${CUSTOMER}/credit-standing`],
+  ['POST', `${CUSTOMER}/screening-profile`],
 ];
 const RISK_OPERATIONS = [
   ['POST', '/api/v1/risk/assess'],
@@ -107,10 +116,26 @@ const COMPLIANCE_OPERATIONS = [
   ['GET', '/api/v2/compliance/screen'],
 ];
 
-test('risk reads a customer credit profile; compliance reads a customer and its KYC status; nothing else', () => {
-  assert.deepEqual(admitted('customer', RISK, CUSTOMER_OPERATIONS), [`GET ${CUSTOMER}/credit`]);
-  // Compliance also reads the KYC status (customer #13: svc-cmp-evidence on SERVICE_CALLERS_PROFILE and SERVICE_CALLERS_KYC).
-  assert.deepEqual(admitted('customer', COMPLIANCE, CUSTOMER_OPERATIONS), [`GET ${CUSTOMER}`, `GET ${CUSTOMER}/kyc-status`]);
+test('risk reads a credit standing; compliance reads a screening profile; nothing else', () => {
+  assert.deepEqual(admitted('customer', RISK, CUSTOMER_OPERATIONS), [`GET ${CUSTOMER}/credit-standing`]);
+  assert.deepEqual(admitted('customer', COMPLIANCE, CUSTOMER_OPERATIONS), [`GET ${CUSTOMER}/screening-profile`]);
+});
+
+test('gateway: the service-only customer reads stay off the edge', () => {
+  for (const azp of FIRST_PARTY) {
+    for (const suffix of ['credit-standing', 'screening-profile']) {
+      for (const [m, p] of [
+        ['GET', `${CUSTOMER}/${suffix}`],
+        ['GET', `${CUSTOMER}/${suffix}/`],
+        ['GET', `${CUSTOMER}/${suffix}/x`],
+        ['POST', `${CUSTOMER}/${suffix}`],
+      ]) {
+        assert.ok(!admits('customer', GATEWAY, m, p, { azp }), `${azp} ${m} ${p}`);
+      }
+    }
+    // The first-party reads keep working.
+    for (const p of [CUSTOMER, `${CUSTOMER}/credit`, `${CUSTOMER}/kyc-status`]) assert.ok(admits('customer', GATEWAY, 'GET', p, { azp }), `${azp} GET ${p}`);
+  }
 });
 
 test('loan calls risk loan eligibility only; payments calls assess and screen (v1 and v2) only', () => {
