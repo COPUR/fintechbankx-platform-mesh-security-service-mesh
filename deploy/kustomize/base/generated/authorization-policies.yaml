@@ -547,6 +547,13 @@ spec:
               - GET
             paths:
               - /api/v1/customers/*
+            notPaths:
+              - /api/v1/customers/{*}/credit-standing
+              - /api/v1/customers/{*}/credit-standing/
+              - /api/v1/customers/{*}/credit-standing/{**}
+              - /api/v1/customers/{*}/screening-profile
+              - /api/v1/customers/{*}/screening-profile/
+              - /api/v1/customers/{*}/screening-profile/{**}
     - from:
         - source:
             principals:

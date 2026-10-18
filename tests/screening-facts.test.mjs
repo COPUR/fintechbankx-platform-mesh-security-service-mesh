@@ -121,6 +121,25 @@ test('risk reads a credit standing; compliance reads a screening profile; nothin
   assert.deepEqual(admitted('customer', COMPLIANCE, CUSTOMER_OPERATIONS), [`GET ${CUSTOMER}/screening-profile`]);
 });
 
+test('loan keeps its customer reads and credit calls, but not the screening-facts reads', () => {
+  // DevSecOps (mesh round 16, S-1): loan's GET rule is a prefix match on /api/v1/customers/*, so it
+  // also reached the two service-only reads; they are excluded there, with their subpaths.
+  assert.deepEqual(admitted('customer', LOAN, CUSTOMER_OPERATIONS), [
+    `GET ${CUSTOMER}`,
+    `GET ${CUSTOMER}/credit`,
+    `GET ${CUSTOMER}/kyc-status`,
+    `POST ${CUSTOMER}/credit/reserve`,
+    `POST ${CUSTOMER}/credit/release`,
+    `GET ${CUSTOMER}/`,
+    `GET ${CUSTOMER}/credit/`,
+  ]);
+  for (const suffix of ['credit-standing', 'screening-profile']) {
+    for (const p of [`${CUSTOMER}/${suffix}`, `${CUSTOMER}/${suffix}/`, `${CUSTOMER}/${suffix}/x`, `${CUSTOMER}/${suffix}/x/y`]) {
+      assert.ok(!admits('customer', LOAN, 'GET', p), `loan GET ${p}`);
+    }
+  }
+});
+
 test('gateway: the service-only customer reads stay off the edge', () => {
   for (const azp of FIRST_PARTY) {
     for (const suffix of ['credit-standing', 'screening-profile']) {

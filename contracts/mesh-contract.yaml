@@ -947,11 +947,15 @@ edges:
   # East-west: loan -> customer credit (CustomerProfileHttpAdapter, caller JWT propagated).
   # Since a33b418 the loan service calls with its own client-credentials token
   # (client id svc-ln-loan-lifecycle); Keycloak must put svc-cus-profile-kyc in aud.
+  # The GET rule is a prefix match, so it leaves out the two service-only
+  # screening-facts reads (risk's and compliance's alone) and everything below
+  # them (DevSecOps review of mesh round 16, S-1).
   - from: lending/loan-lifecycle-service
     to: customer/customer-profile-kyc-service
     port: 8080
     methods: [GET]
     paths: [/api/v1/customers/*]
+    notPaths: ["/api/v1/customers/{*}/credit-standing", "/api/v1/customers/{*}/screening-profile"]
     evidence: CUSTOMER_SERVICE_BASE_URL=http://customer-profile-kyc-service.customer.svc.cluster.local:8080; GET /api/v1/customers/{customerId}
   - from: lending/loan-lifecycle-service
     to: customer/customer-profile-kyc-service
