@@ -1,0 +1,129 @@
+# istio/istiod 1.24.3 - control plane, production-shaped defaults (Proposed).
+# Environment files under env/<env>/ override replica counts and resources.
+
+# HA: three replicas spread over zones, HPA 3..6, PDB (chart default minAvailable 1).
+autoscaleEnabled: true
+autoscaleMin: 3
+autoscaleMax: 6
+replicaCount: 3
+rollingMaxSurge: 1
+rollingMaxUnavailable: 0
+cpu:
+  targetAverageUtilization: 70
+resources:
+  requests:
+    cpu: 500m
+    memory: 2Gi
+  limits:
+    memory: 4Gi
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        app: istiod
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app: istiod
+env:
+  # istiod fetches the Keycloak JWKS itself and pushes it to proxies.
+  PILOT_JWT_ENABLE_REMOTE_JWKS: "false"
+  # Native sidecars (restartable init containers, Kubernetes 1.29+; EKS 1.31):
+  # the proxy starts before and stops after the application container, so
+  # graceful shutdown (in-flight requests, outbox relay sends to MSK through
+  # the sidecar) is not cut off by Envoy's drain, and Jobs (Flyway
+  # migrations, realm import) complete with a sidecar. Request-to-pay PR #14
+  # review. Pods still bound their total shutdown with
+  # terminationGracePeriodSeconds.
+  ENABLE_NATIVE_SIDECARS: "true"
+
+global:
+  # Mirror docker.io/istio images into ECR and set hub here for production.
+  hub: docker.io/istio
+  tag: 1.24.3
+  logAsJson: true
+  defaultPodDisruptionBudget:
+    enabled: true
+  proxy:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+    holdApplicationUntilProxyStarts: true
+
+meshConfig:
+  trustDomain: cluster.local
+  # Only hosts in the registry (Kubernetes services + ServiceEntries in
+  # deploy/kustomize) are reachable; everything else is blackholed.
+  outboundTrafficPolicy:
+    mode: REGISTRY_ONLY
+  # BASE normalization (RFC 3986 dot segments) plus collapsing "//", applied
+  # before routing and before AuthorizationPolicy is evaluated. The gateway's
+  # notPaths exclusions rely on it: /api/v1/risk//assess is compared as
+  # /api/v1/risk/assess. Trailing slashes are not rewritten by any mode; the
+  # renderer adds "<path>/*" (or "<template>/" and "<template>/{**}")
+  # companions for every notPath instead (tests/path-normalization.test.mjs).
+  pathNormalization:
+    normalization: MERGE_SLASHES
+  accessLogFile: /dev/stdout
+  accessLogEncoding: JSON
+  # Debugging and correlation fields only (tests/access-log.test.mjs). The
+  # path is logged without its query string (queries can carry identifiers
+  # and OAuth codes; Istio adds the envoy.formatter.req_without_query
+  # extension when the format uses %REQ_WITHOUT_QUERY%). Never logged:
+  # x-forwarded-for, the downstream remote address, user agent and
+  # credentials (Authorization, DPoP, cookies).
+  accessLogFormat: |
+    {
+      "start_time": "%START_TIME%",
+      "method": "%REQ(:METHOD)%",
+      "path": "%REQ_WITHOUT_QUERY(X-ENVOY-ORIGINAL-PATH?:PATH)%",
+      "protocol": "%PROTOCOL%",
+      "response_code": "%RESPONSE_CODE%",
+      "response_code_details": "%RESPONSE_CODE_DETAILS%",
+      "response_flags": "%RESPONSE_FLAGS%",
+      "duration": "%DURATION%",
+      "bytes_received": "%BYTES_RECEIVED%",
+      "bytes_sent": "%BYTES_SENT%",
+      "route_name": "%ROUTE_NAME%",
+      "upstream_cluster": "%UPSTREAM_CLUSTER%",
+      "x_request_id": "%REQ(X-REQUEST-ID)%",
+      "traceparent": "%REQ(TRACEPARENT)%",
+      "x_fapi_interaction_id": "%REQ(X-FAPI-INTERACTION-ID)%"
+    }
+  # Sidecar agent serves app + Envoy metrics on 15020 (/stats/prometheus);
+  # Prometheus scrapes service pods there, outside mTLS interception.
+  enablePrometheusMerge: true
+  defaultConfig:
+    holdApplicationUntilProxyStarts: true
+    # Envoy TLS stats for the observability alert MeshMtlsHandshakeFailures
+    # (envoy_listener_ssl_* / envoy_cluster_ssl_*). Suffixes keep cardinality
+    # to the handshake and failure counters.
+    proxyStatsMatcher:
+      inclusionSuffixes:
+        - ssl.handshake
+        - ssl.connection_error
+        - ssl.fail_verify_error
+        - ssl.fail_verify_san
+        - ssl.fail_verify_no_cert
+        - ssl.no_certificate
+    proxyMetadata:
+      ISTIO_META_DNS_CAPTURE: "true"
+      ISTIO_META_DNS_AUTO_ALLOCATE: "true"
+  enableTracing: true
+  extensionProviders:
+    - name: otel-tracing
+      opentelemetry:
+        service: otel-collector.observability.svc.cluster.local
+        port: 4317
+  defaultProviders:
+    tracing:
+      - otel-tracing
+  localityLbSetting:
+    enabled: true

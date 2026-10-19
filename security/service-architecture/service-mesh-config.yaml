@@ -430,45 +430,9 @@ spec:
     - key: request.headers[x-banking-role]
       values: ["fraud-analyst", "ml-service", "admin"]
 ---
-# Telemetry configuration for observability
-apiVersion: telemetry.istio.io/v1alpha1
-kind: Telemetry
-metadata:
-  name: banking-telemetry
-  namespace: banking-production
-spec:
-  metrics:
-  - providers:
-    - name: prometheus
-  - overrides:
-    - match:
-        metric: ALL_METRICS
-      tagOverrides:
-        banking_service:
-          value: "%{DEPLOYMENT_NAME}"
-        banking_customer_id:
-          value: "%{REQUEST_HEADER_X_CUSTOMER_ID}"
-        banking_transaction_id:
-          value: "%{REQUEST_HEADER_X_TRANSACTION_ID}"
-  accessLogging:
-  - providers:
-    - name: otel
-  tracing:
-  - providers:
-    - name: jaeger
-  - customTags:
-      banking_service:
-        header:
-          name: x-banking-service
-      banking_operation:
-        header:
-          name: x-banking-operation
-      customer_id:
-        header:
-          name: x-customer-id
-      transaction_id:
-        header:
-          name: x-transaction-id
+# Telemetry banking-telemetry retired 2026-10-08: it tagged metrics and spans
+# with x-customer-id and x-transaction-id (PII, unbounded cardinality).
+# Validator rule R12 rejects any Telemetry that tags customer or account ids.
 ---
 # EnvoyFilter for custom headers and security
 apiVersion: networking.istio.io/v1alpha3

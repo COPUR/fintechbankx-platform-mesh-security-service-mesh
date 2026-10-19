@@ -1,0 +1,70 @@
+# jetstack/cert-manager (version in ../CERT_MANAGER_VERSION) - platform
+# install values (Proposed). Installed by scripts/istio/install-mesh.sh before
+# trust-manager, the platform PKI (deploy/kustomize/platform-pki/<env>) and
+# Istio. v1.19 is the newest cert-manager line whose e2e matrix covers
+# Kubernetes 1.31 (the target EKS version; 1.31 to 1.34). v1.20 and later
+# start at 1.32.
+#
+# Only a CA ClusterIssuer (fintechbankx-internal-ca) is used; no ACME.
+# Namespace cert-manager is not injected and has no default-deny
+# NetworkPolicy (contracts/mesh-contract.yaml exceptions): the kube-apiserver
+# calls the webhook from outside the mesh.
+
+# CRDs are part of the release; keep them on helm uninstall so Certificates
+# and ClusterIssuers are never garbage-collected with the chart.
+crds:
+  enabled: true
+  keep: true
+
+global:
+  leaderElection:
+    # Keep the lease next to the controller instead of kube-system.
+    namespace: cert-manager
+
+# HA: the webhook is on the admission path of every cert-manager resource.
+replicaCount: 2
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+webhook:
+  replicaCount: 2
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+cainjector:
+  replicaCount: 2
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  resources:
+    requests:
+      cpu: 20m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+# Metrics stay on (Service port 9402). The ServiceMonitor belongs to the
+# observability repo; its CRD may not exist when the platform is installed.
+prometheus:
+  enabled: true
+  servicemonitor:
+    enabled: false
+
+# The post-install check proves the webhook answers before trust-manager
+# (whose chart creates a cert-manager Certificate) is installed.
+startupapicheck:
+  enabled: true

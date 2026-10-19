@@ -1,0 +1,2 @@
+# prod: production defaults from ../../istiod.values.yaml.
+autoscaleMin: 3

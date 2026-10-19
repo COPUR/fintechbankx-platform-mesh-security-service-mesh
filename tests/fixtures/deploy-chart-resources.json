@@ -1,0 +1,93 @@
+{
+  "description": "Kinds the service charts render (helm template, kube-version 1.31.0), as (apiGroup, resource) pairs the deploy Role must cover. Surveyed 2026-10-17 from local clones that may not be at their PR heads. optIn lists kinds a chart renders only behind a flag that is off by default; the platform owns them and the Role grants none of them. secretLookups lists charts that read a Secret with lookup (Helm aborts on Forbidden, so they do not deploy with this Role until the lookup is removed from the chart).",
+  "charts": {
+    "fintechbankx-platform-delivery-iac-cicd-templates charts/fintechbankx-service (150aaf6; ci values, skeleton defaults)": [
+      "apps/v1/Deployment",
+      "v1/Service",
+      "v1/ServiceAccount",
+      "v1/ConfigMap",
+      "autoscaling/v2/HorizontalPodAutoscaler",
+      "policy/v1/PodDisruptionBudget",
+      "external-secrets.io/v1beta1/ExternalSecret"
+    ],
+    "neo-fintechbankx-corebanking-accounts-ledger-service deploy/helm/accounts-ledger-service (2db7a04)": [
+      "apps/v1/Deployment",
+      "v1/Service",
+      "v1/ServiceAccount",
+      "v1/ConfigMap",
+      "autoscaling/v2/HorizontalPodAutoscaler",
+      "policy/v1/PodDisruptionBudget",
+      "external-secrets.io/v1beta1/ExternalSecret",
+      "batch/v1/Job (pre-install,pre-upgrade hook)",
+      "v1/ServiceAccount (hook)",
+      "external-secrets.io/v1beta1/ExternalSecret (hook)"
+    ],
+    "fintechbankx-openfinance-open-data-products-catalog deploy/helm/open-products-catalog-service (6b168a7)": [
+      "apps/v1/Deployment",
+      "v1/Service",
+      "v1/ServiceAccount",
+      "v1/ConfigMap",
+      "autoscaling/v2/HorizontalPodAutoscaler",
+      "policy/v1/PodDisruptionBudget",
+      "external-secrets.io/v1beta1/ExternalSecret",
+      "batch/v1/Job (pre-upgrade hook)",
+      "batch/v1/CronJob"
+    ],
+    "fintechbankx-openfinance-{consent-auth-service, corporate-data-business-financial, open-data-atm-directory, payee-metadata-banking-metadata, payee-metadata-payee-verification, retail-data-personal-financial} infrastructure/helm/chart (legacy, superseded by the reference chart)": [
+      "apps/v1/Deployment"
+    ]
+  },
+  "secretLookups": {
+    "fintechbankx-openfinance-open-data-products-catalog deploy/helm/open-products-catalog-service": "templates/deployment.yaml:38 lookup \"v1\" \"Secret\" twice (checksum/secret of the DB and migration Secrets), at 6b168a7 and on its PR branch"
+  },
+  "resources": [
+    {
+      "apiGroup": "apps",
+      "resource": "deployments"
+    },
+    {
+      "apiGroup": "",
+      "resource": "services"
+    },
+    {
+      "apiGroup": "",
+      "resource": "serviceaccounts"
+    },
+    {
+      "apiGroup": "",
+      "resource": "configmaps"
+    },
+    {
+      "apiGroup": "autoscaling",
+      "resource": "horizontalpodautoscalers"
+    },
+    {
+      "apiGroup": "policy",
+      "resource": "poddisruptionbudgets"
+    },
+    {
+      "apiGroup": "external-secrets.io",
+      "resource": "externalsecrets"
+    },
+    {
+      "apiGroup": "batch",
+      "resource": "jobs"
+    },
+    {
+      "apiGroup": "batch",
+      "resource": "cronjobs"
+    }
+  ],
+  "optIn": [
+    {
+      "apiGroup": "networking.k8s.io",
+      "resource": "networkpolicies",
+      "flag": "networkPolicy.enabled"
+    },
+    {
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "servicemonitors",
+      "flag": "observability.serviceMonitor.enabled"
+    }
+  ]
+}

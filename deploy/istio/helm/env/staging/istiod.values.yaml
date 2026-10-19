@@ -1,0 +1,2 @@
+# staging: production shape (3 replicas) with a lower ceiling.
+autoscaleMax: 4

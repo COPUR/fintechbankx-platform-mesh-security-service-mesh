@@ -1,0 +1,28 @@
+# Publishes the Amazon RDS / DocumentDB CA bundle (public certificates) as
+# ConfigMap rds-ca-bundle, key global-bundle.pem, in every FinTechBankX
+# namespace. Services mount it to verify Aurora PostgreSQL and DocumentDB TLS
+# (e.g. sslmode=verify-full, tlsCAFile). The source ConfigMap
+# amazon-rds-ca-source in the trust namespace is generated from
+# amazon-rds-global-bundle.pem, a copy of
+# https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+# (111 certificates, all issued by Amazon Web Services; refresh when AWS
+# rotates its CAs, see docs).
+apiVersion: trust.cert-manager.io/v1alpha1
+kind: Bundle
+metadata:
+  name: rds-ca-bundle
+  labels:
+    fintechbankx.io/context: platform
+spec:
+  sources:
+    - configMap:
+        name: amazon-rds-ca-source
+        key: global-bundle.pem
+  target:
+    configMap:
+      key: global-bundle.pem
+    namespaceSelector:
+      matchExpressions:
+        - key: fintechbankx.io/namespace-kind
+          operator: In
+          values: [service, platform]

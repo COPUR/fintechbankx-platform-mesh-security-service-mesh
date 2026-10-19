@@ -1,0 +1,25 @@
+# Corporate directory (AWS Managed Microsoft AD over LDAPS 636) for the prod
+# identity overlay only (Proposed): the directory CA as trust-manager Bundle
+# corporate-directory-ca and Keycloak's egress to the directory.
+# dev/staging federate the in-cluster OpenLDAP instead and do not use this.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - corporate-directory-ca.yaml
+  - egress.yaml
+
+replacements:
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.ENVIRONMENT}
+    targets:
+      - select: {kind: ExternalSecret, name: corporate-directory-ca-source}
+        fieldPaths: [spec.data.0.remoteRef.key]
+        options: {delimiter: /, index: 0}
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.DIRECTORY_HOST}
+    targets:
+      - select: {kind: ServiceEntry, name: corporate-directory}
+        fieldPaths: [spec.hosts.0]
+  - source: {kind: ConfigMap, name: mesh-params, fieldPath: data.DIRECTORY_CIDR}
+    targets:
+      - select: {kind: NetworkPolicy, name: allow-egress-corporate-directory}
+        fieldPaths: [spec.egress.0.to.0.ipBlock.cidr]

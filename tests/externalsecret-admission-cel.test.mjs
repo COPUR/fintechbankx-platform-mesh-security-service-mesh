@@ -1,0 +1,193 @@
+// Executes the CEL of the generated ValidatingAdmissionPolicy
+// fintechbankx-externalsecret-scope with cel-go (tests/cel/main.go), the CEL
+// implementation the kube-apiserver uses, against concrete admission requests.
+// Variables are composed as the apiserver does (in order, under `variables`);
+// see tests/cel/main.go for what is not modelled (typed schemas, cost limits).
+//
+// Needs Go on PATH; cel-go comes from the module cache or the Go proxy. Without
+// Go the tests are skipped (reported as skipped, never as passed).
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { loadContract } from '../scripts/lib/contract.mjs';
+import { render } from '../scripts/generate/render-mesh-policies.mjs';
+import { evaluate, skip } from './cel/evaluate.mjs';
+
+const ENV = 'prod';
+
+// The policy as an overlay renders it: mesh-params replaces ENVIRONMENT.
+function policySpec() {
+  const [vap] = render(loadContract())['externalsecret-admission.yaml'];
+  assert.equal(vap.kind, 'ValidatingAdmissionPolicy');
+  const spec = structuredClone(vap.spec);
+  const env = spec.variables.find((v) => v.name === 'env');
+  assert.equal(env.expression, "'ENVIRONMENT'");
+  env.expression = `'${ENV}'`;
+  return spec;
+}
+
+const nsObject = (name, kind) => ({
+  metadata: { name, labels: { 'kubernetes.io/metadata.name': name, 'fintechbankx.io/namespace-kind': kind } },
+});
+const SERVICE_NS = { payments: 'service', lending: 'service', corebanking: 'service', observability: 'platform', sandbox: 'service' };
+
+function admissionCase(name, ns, { label, store = 'aws-secrets-manager', storeKind = 'ClusterSecretStore', keys = [], dataFrom, data, target } = {}) {
+  return {
+    name,
+    request: { namespace: ns, operation: 'CREATE', kind: { group: 'external-secrets.io', version: 'v1beta1', kind: 'ExternalSecret' } },
+    namespaceObject: nsObject(ns, SERVICE_NS[ns]),
+    object: {
+      apiVersion: 'external-secrets.io/v1beta1',
+      kind: 'ExternalSecret',
+      metadata: { name, namespace: ns, ...(label ? { labels: { 'app.kubernetes.io/name': label } } : {}) },
+      spec: {
+        secretStoreRef: { kind: storeKind, name: store },
+        ...(keys.length || data ? { data: data || keys.map((key, i) => ({ secretKey: `k${i}`, remoteRef: { key } })) } : {}),
+        ...(dataFrom ? { dataFrom } : {}),
+        ...(target ? { target } : {}),
+      },
+    },
+  };
+}
+
+const BULK = 'payment-bulk-orchestration-service';
+const cases = [
+  admissionCase('own-slug', 'payments', { label: BULK, keys: [`${ENV}/${BULK}/db-app`, `${ENV}/${BULK}/oidc-client`] }),
+  admissionCase('platform-internal-ca', 'payments', { label: BULK, keys: [`${ENV}/platform/internal-ca`] }),
+  admissionCase('platform-internal-ca-extract', 'payments', { label: BULK, dataFrom: [{ extract: { key: `${ENV}/platform/internal-ca` } }] }),
+  admissionCase('identity-keycloak', 'lending', { label: 'loan-lifecycle-service', keys: [`${ENV}/identity-keycloak/bootstrap-admin-client`] }),
+  admissionCase('platform-store', 'payments', { label: BULK, store: 'aws-secrets-manager-platform', keys: [`${ENV}/${BULK}/db-app`] }),
+  admissionCase('namespaced-store', 'payments', { label: BULK, storeKind: 'SecretStore', keys: [`${ENV}/${BULK}/db-app`] }),
+  admissionCase('neighbour-slug', 'payments', { label: BULK, keys: [`${ENV}/payment-initiation-settlement-service/db-app`] }),
+  admissionCase('foreign-label', 'payments', { label: 'loan-lifecycle-service', keys: [`${ENV}/loan-lifecycle-service/db-app`] }),
+  admissionCase('unlabelled', 'payments', { keys: [`${ENV}/${BULK}/db-app`] }),
+  admissionCase('other-environment', 'payments', { label: BULK, keys: [`staging/${BULK}/db-app`] }),
+  admissionCase('find', 'lending', { label: 'loan-lifecycle-service', dataFrom: [{ find: { name: { regexp: '.*' } } }] }),
+  admissionCase('source-ref', 'lending', {
+    label: 'loan-lifecycle-service',
+    data: [{ secretKey: 'k', remoteRef: { key: `${ENV}/loan-lifecycle-service/db-app` }, sourceRef: { storeRef: { kind: 'ClusterSecretStore', name: 'aws-secrets-manager-platform' } } }],
+  }),
+  admissionCase('shared-namespace', 'observability', { keys: [`${ENV}/observability/remote-write`, `${ENV}/observability-grafana/oidc-client`] }),
+  admissionCase('shared-namespace-platform-key', 'observability', { keys: [`${ENV}/platform/internal-ca`] }),
+  admissionCase('no-scope', 'sandbox', { label: 'anything', keys: [`${ENV}/anything/x`] }),
+  // Operator import credential (terraform-modules operator-db-access): never synced, not even by its own service.
+  admissionCase('db-import', 'payments', { label: BULK, keys: [`${ENV}/${BULK}/db-app`, `${ENV}/${BULK}/db-import`] }),
+  admissionCase('db-import-extract', 'payments', { label: BULK, dataFrom: [{ extract: { key: `${ENV}/${BULK}/db-import` } }] }),
+  admissionCase('db-import-shared', 'observability', { keys: [`${ENV}/observability/db-import`] }),
+  admissionCase('db-import-lookalike', 'payments', { label: BULK, keys: [`${ENV}/${BULK}/db-import-notes`, `${ENV}/${BULK}/old-db-import/x`] }),
+];
+
+test('CEL: a service-namespace ExternalSecret for <env>/platform/internal-ca is rejected', { skip }, () => {
+  const r = evaluate(policySpec(), cases);
+  for (const name of ['platform-internal-ca', 'platform-internal-ca-extract']) {
+    assert.equal(r[name].allowed, false, name);
+    assert.deepEqual(r[name].messages, [`every remote key must start with ${ENV}/${BULK}/; got ${ENV}/platform/internal-ca`], name);
+  }
+  assert.equal(r['own-slug'].allowed, true, r['own-slug'].messages.join('; '));
+});
+
+test('CEL: store, slug, label, find and sourceRef rules reject; own and shared scopes admit', { skip }, () => {
+  const r = evaluate(policySpec(), cases);
+  const allowed = Object.entries(r).filter(([, v]) => v.allowed).map(([k]) => k).sort();
+  assert.deepEqual(allowed, ['db-import-lookalike', 'own-slug', 'shared-namespace']);
+  const msg = (name) => r[name].messages.join(' | ');
+  assert.match(msg('platform-store'), /secretStoreRef must be ClusterSecretStore aws-secrets-manager/);
+  assert.match(msg('namespaced-store'), /secretStoreRef must be ClusterSecretStore aws-secrets-manager/);
+  assert.match(msg('neighbour-slug'), /got prod\/payment-initiation-settlement-service\/db-app/);
+  assert.match(msg('identity-keycloak'), /got prod\/identity-keycloak\/bootstrap-admin-client/);
+  assert.match(msg('foreign-label'), /must carry label app.kubernetes.io\/name set to one of its service accounts: payment-bulk-orchestration-service, /);
+  assert.match(msg('unlabelled'), /must carry label app.kubernetes.io\/name/);
+  assert.match(msg('other-environment'), /got staging\//);
+  assert.match(msg('find'), /no find, no sourceRef/);
+  assert.match(msg('source-ref'), /may not override the store/);
+  assert.match(msg('shared-namespace-platform-key'), /must start with prod\/observability\/ or prod\/observability-grafana\/; got prod\/platform\/internal-ca/);
+  assert.match(msg('no-scope'), /namespace sandbox has no secret scope/);
+});
+
+test('CEL: the rejection comes from the key-prefix validation (the test can fail)', { skip }, () => {
+  const spec = policySpec();
+  spec.validations = spec.validations.filter((v) => !v.expression.includes('variables.prefixes.exists'));
+  const r = evaluate(spec, cases);
+  assert.equal(r['platform-internal-ca'].allowed, true, 'without the prefix rule the platform key would be admitted');
+});
+
+test('CEL: remote keys ending in /db-import are rejected, even inside the own <env>/<slug>/ scope', { skip }, () => {
+  const r = evaluate(policySpec(), cases);
+  for (const [name, key] of [
+    ['db-import', `${ENV}/${BULK}/db-import`],
+    ['db-import-extract', `${ENV}/${BULK}/db-import`],
+    ['db-import-shared', `${ENV}/observability/db-import`],
+  ]) {
+    assert.equal(r[name].allowed, false, name);
+    assert.deepEqual(r[name].messages, [`remote keys ending in /db-import (operator import credential) are never synced into a cluster; got ${key}`], name);
+  }
+  assert.equal(r['db-import-lookalike'].allowed, true, r['db-import-lookalike'].messages.join('; '));
+});
+
+// Core banking accounts ledger (chart deploy/helm/accounts-ledger-service,
+// ledger 2db7a04): both ExternalSecrets carry app.kubernetes.io/name
+// accounts-ledger-service (the migration one also component db-migration) and
+// read <env>/accounts-ledger-service/db-app and /db-migration. The slug is that
+// label, not the context code: "env/acc-accounts-ledger" keys are refused, and
+// so is the Job's hook ServiceAccount name as a label.
+const LEDGER = 'accounts-ledger-service';
+const ledgerCases = [
+  admissionCase('ledger-runtime', 'corebanking', { label: LEDGER, keys: [`${ENV}/${LEDGER}/db-app`] }),
+  admissionCase('ledger-migration', 'corebanking', { label: LEDGER, keys: [`${ENV}/${LEDGER}/db-migration`, `${ENV}/${LEDGER}/db-migration`] }),
+  admissionCase('ledger-context-code-key', 'corebanking', { label: LEDGER, keys: [`${ENV}/acc-accounts-ledger/db-app`] }),
+  admissionCase('ledger-context-code-label', 'corebanking', { label: 'acc-accounts-ledger', keys: [`${ENV}/acc-accounts-ledger/db-app`] }),
+  admissionCase('ledger-hook-account-label', 'corebanking', { label: `${LEDGER}-db-migration`, keys: [`${ENV}/${LEDGER}-db-migration/db-migration`] }),
+  admissionCase('ledger-neighbour', 'corebanking', { label: LEDGER, keys: [`${ENV}/payment-initiation-settlement-service/db-app`] }),
+  admissionCase('ledger-from-payments', 'payments', { label: BULK, keys: [`${ENV}/${LEDGER}/db-app`] }),
+];
+
+test('CEL: corebanking admits the ledger\'s own <env>/accounts-ledger-service/ keys only', { skip }, () => {
+  const r = evaluate(policySpec(), ledgerCases);
+  const allowed = Object.entries(r).filter(([, v]) => v.allowed).map(([k]) => k).sort();
+  assert.deepEqual(allowed, ['ledger-migration', 'ledger-runtime'], JSON.stringify(r));
+  const msg = (name) => r[name].messages.join(' | ');
+  assert.equal(msg('ledger-context-code-key'), `every remote key must start with ${ENV}/${LEDGER}/; got ${ENV}/acc-accounts-ledger/db-app`);
+  assert.match(msg('ledger-context-code-label'), new RegExp(`must carry label app.kubernetes.io/name set to one of its service accounts: ${LEDGER}$`));
+  assert.match(msg('ledger-hook-account-label'), /must carry label app.kubernetes.io\/name/);
+  assert.match(msg('ledger-neighbour'), /got prod\/payment-initiation-settlement-service\/db-app/);
+  assert.match(msg('ledger-from-payments'), new RegExp(`got ${ENV}/${LEDGER}/db-app`));
+});
+
+// spec.target: ESO writes the Secret with its own rights, which the deploy group
+// does not have. In a service namespace the target is an Opaque Secret that the
+// ExternalSecret owns: no service-account-token type or annotation (the token
+// controller would mint a non-expiring token for that account), and no Merge,
+// Orphan or None creationPolicy (Merge writes into a Secret it does not own).
+const own = [`${ENV}/${BULK}/db-app`];
+const targetCases = [
+  admissionCase('target-chart', 'payments', { label: BULK, keys: own, target: { name: 'bulk-db', creationPolicy: 'Owner' } }),
+  admissionCase('target-absent', 'payments', { label: BULK, keys: own }),
+  admissionCase('target-opaque-template', 'payments', {
+    label: BULK, keys: own, target: { template: { type: 'Opaque', data: { url: '{{ .k0 }}' }, metadata: { labels: { a: 'b' } } } },
+  }),
+  admissionCase('target-sa-token', 'payments', {
+    label: BULK, keys: own,
+    target: { template: { type: 'kubernetes.io/service-account-token', metadata: { annotations: { 'kubernetes.io/service-account.name': BULK } } } },
+  }),
+  admissionCase('target-sa-annotation', 'payments', {
+    label: BULK, keys: own, target: { template: { metadata: { annotations: { 'kubernetes.io/service-account.name': BULK } } } },
+  }),
+  admissionCase('target-dockerconfig', 'payments', { label: BULK, keys: own, target: { template: { type: 'kubernetes.io/dockerconfigjson' } } }),
+  admissionCase('target-merge', 'payments', { label: BULK, keys: own, target: { name: 'payment-initiation-settlement-service-db', creationPolicy: 'Merge' } }),
+  admissionCase('target-orphan', 'payments', { label: BULK, keys: own, target: { creationPolicy: 'Orphan' } }),
+  admissionCase('target-shared-namespace', 'observability', {
+    keys: [`${ENV}/observability/remote-write`], target: { creationPolicy: 'Merge', template: { type: 'kubernetes.io/basic-auth' } },
+  }),
+];
+
+test('CEL: a service-namespace ExternalSecret targets an Opaque Secret it owns', { skip }, () => {
+  const r = evaluate(policySpec(), targetCases);
+  const allowed = Object.entries(r).filter(([, v]) => v.allowed).map(([k]) => k).sort();
+  assert.deepEqual(allowed, ['target-absent', 'target-chart', 'target-opaque-template', 'target-shared-namespace'], JSON.stringify(r, null, 1));
+  const msg = (name) => r[name].messages.join(' | ');
+  assert.match(msg('target-sa-token'), /spec.target.template.type must be absent or Opaque in service namespaces; got kubernetes.io\/service-account-token/);
+  assert.match(msg('target-sa-token'), /spec.target.template may not set the annotation kubernetes.io\/service-account.name/);
+  assert.equal(msg('target-sa-annotation'), 'spec.target.template may not set the annotation kubernetes.io/service-account.name');
+  assert.match(msg('target-dockerconfig'), /got kubernetes.io\/dockerconfigjson$/);
+  assert.equal(msg('target-merge'), 'spec.target.creationPolicy must be Owner (the default) in service namespaces; got Merge');
+  assert.match(msg('target-orphan'), /got Orphan$/);
+});

@@ -1,0 +1,43 @@
+# CA certificate of the corporate directory, synced from Secrets Manager
+# entry <env>/platform/corporate-directory-ca (property certificate, PEM;
+# public material, kept out of git so the directory owner can rotate it).
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: corporate-directory-ca-source
+  namespace: cert-manager
+  labels:
+    fintechbankx.io/context: platform
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: aws-secrets-manager-platform
+  target:
+    name: corporate-directory-ca-source
+    creationPolicy: Owner
+  data:
+    - secretKey: ca.crt
+      remoteRef:
+        key: ENVIRONMENT/platform/corporate-directory-ca
+        property: certificate
+---
+# ConfigMap corporate-directory-ca (key ca.crt) in namespace identity, mounted
+# by the prod Keycloak CR as truststore corporate-directory-ca.
+apiVersion: trust.cert-manager.io/v1alpha1
+kind: Bundle
+metadata:
+  name: corporate-directory-ca
+  labels:
+    fintechbankx.io/context: platform
+spec:
+  sources:
+    - secret:
+        name: corporate-directory-ca-source
+        key: ca.crt
+  target:
+    configMap:
+      key: ca.crt
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: identity

@@ -1,0 +1,23 @@
+# Publishes the internal CA certificate (public part only, key tls.crt of
+# the synced key pair) as ConfigMap fintechbankx-internal-ca, key ca.crt, in
+# every FinTechBankX namespace. Consumed by Keycloak (truststore
+# internal-ca) to verify the OpenLDAP StartTLS certificate.
+apiVersion: trust.cert-manager.io/v1alpha1
+kind: Bundle
+metadata:
+  name: fintechbankx-internal-ca
+  labels:
+    fintechbankx.io/context: platform
+spec:
+  sources:
+    - secret:
+        name: fintechbankx-internal-ca-keypair
+        key: tls.crt
+  target:
+    configMap:
+      key: ca.crt
+    namespaceSelector:
+      matchExpressions:
+        - key: fintechbankx.io/namespace-kind
+          operator: In
+          values: [service, platform]
